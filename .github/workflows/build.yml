@@ -22,6 +22,19 @@ jobs:
           java-version: '17'
       - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v4
+      - name: Restore repository development signing key
+        if: github.event_name != 'pull_request'
+        env:
+          DEVELOPMENT_KEYSTORE: ${{ secrets.NICO_DEV_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          if [ -n "$DEVELOPMENT_KEYSTORE" ]; then
+            android_user_home="$RUNNER_TEMP/nicotv-android"
+            mkdir -p "$android_user_home"
+            printf '%s' "$DEVELOPMENT_KEYSTORE" | base64 --decode > "$android_user_home/debug.keystore"
+            chmod 600 "$android_user_home/debug.keystore"
+            printf 'ANDROID_USER_HOME=%s\n' "$android_user_home" >> "$GITHUB_ENV"
+          fi
       - name: Test, lint and build APKs
         run: ./gradlew --no-daemon :core:test :comment-client:test :detection:testDebugUnitTest :overlay:testDebugUnitTest :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleRelease
       - name: Upload installable debug APK
