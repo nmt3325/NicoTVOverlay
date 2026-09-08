@@ -1,1 +1,16 @@
-<manifest />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <service
+            android:name="dev.nicotv.detection.NicoTvAccessibilityService"
+            android:label="@string/nicotv_accessibility_label"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/nicotv_accessibility_service" />
+        </service>
+    </application>
+</manifest>

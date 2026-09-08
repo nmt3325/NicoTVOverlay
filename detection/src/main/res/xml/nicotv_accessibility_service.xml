@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:packageNames="dev.nicotv.detection.disabled"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds"
+    android:notificationTimeout="250"
+    android:canRetrieveWindowContent="true"
+    android:canRequestFilterKeyEvents="false"
+    android:canPerformGestures="false"
+    android:canTakeScreenshot="false"
+    android:isAccessibilityTool="false"
+    android:description="@string/nicotv_accessibility_description"
+    tools:targetApi="s" />

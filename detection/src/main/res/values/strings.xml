@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nicotv_accessibility_label">NicoTVOverlay 局の自動検出（要校正）</string>
+    <string name="nicotv_accessibility_description">開始ボタンを押した間だけ、指定したテレビアプリの校正済みライブ表示と局名を確認します。機種・アプリによって利用できません。画面の文字は保存・送信しません。未校正・番組表・録画・不明な局・テレビ画面からの離脱では局を解除します。キー操作・ジェスチャー・スクリーンショットは取得しません。</string>
+</resources>
