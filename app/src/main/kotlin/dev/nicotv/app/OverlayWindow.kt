@@ -4,6 +4,10 @@ import android.content.Context
 import android.graphics.PixelFormat
 import android.hardware.input.InputManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.view.View
 import android.view.Gravity
 import android.view.WindowManager
 import dev.nicotv.core.LiveComment
@@ -15,16 +19,24 @@ class OverlayWindow(private val context: Context, private val failed: () -> Unit
     private var drawingContext: Context? = null
     private var view: DanmakuView? = null
     private var options = OverlayPreferences()
+    private val handler = Handler(Looper.getMainLooper())
+    private var generation = 0L
+    private var ingress: OverlayIngress? = null
     override fun preferences(value: OverlayPreferences) {
+        if (options != value) clear() // settings invalidate pre-attach and delayed ingress as well
         options = value
         view?.let {
             if (!PlatformPermissions.defaultTarget(context)) { clear(); failed(); return }
             // Alpha is applied exactly once at window level, not also to every glyph.
-            it.updatePreferences(value.copy(opacity = 1f))
+            it.updatePreferences(value.copy(opacity = 1f, delayMs = 0L))
             try { manager?.updateViewLayout(it, parameters()) } catch (_: RuntimeException) { clear(); failed() }
         }
     }
     override fun clear() {
+        ++generation
+        val previousIngress = ingress
+        ingress = null
+        previousIngress?.close() // invalidate before detaching or any old callback can run
         val old = view
         val previousManager = manager
         view = null; manager = null; drawingContext = null
@@ -32,10 +44,13 @@ class OverlayWindow(private val context: Context, private val failed: () -> Unit
         old.clearComments()
         try { previousManager?.removeViewImmediate(old) } catch (_: IllegalArgumentException) { /* already removed */ }
     }
+    private fun sessionAllowed(): Boolean = RuntimeSession.state.value.active &&
+        SettingsRepository(context).preferences.getBoolean(dev.nicotv.core.PreferenceContract.SESSION_ACTIVE, false) &&
+        PlatformPermissions.overlays(context) && PlatformPermissions.defaultTarget(context) && PlatformPermissions.screenReady(context)
     override fun comment(value: LiveComment) {
-        if (!RuntimeSession.state.value.active ||
-            !SettingsRepository(context).preferences.getBoolean(dev.nicotv.core.PreferenceContract.SESSION_ACTIVE, false) ||
-            !PlatformPermissions.overlays(context) || !PlatformPermissions.defaultTarget(context) || !PlatformPermissions.screenReady(context)) { clear(); failed(); return }
+        val receivedAt = SystemClock.elapsedRealtime()
+        if (!sessionAllowed()) { clear(); failed(); return }
+        if (value.text.length > OverlayIngress.MAX_TEXT_UTF16 || value.id.length > OverlayIngress.MAX_ID_UTF16) return
         try {
             if (drawingContext == null) {
                 val display = PlatformPermissions.defaultDisplay(context) ?: throw IllegalStateException("標準画面が不明")
@@ -44,12 +59,25 @@ class OverlayWindow(private val context: Context, private val failed: () -> Unit
                 manager = drawingContext!!.getSystemService(WindowManager::class.java)
                 check(manager?.defaultDisplay?.displayId == android.view.Display.DEFAULT_DISPLAY)
             }
-            val target = view ?: DanmakuView(drawingContext!!).also {
-                it.importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-                it.updatePreferences(options.copy(opacity = 1f))
-                manager!!.addView(it, parameters()); view = it
+            if (view == null) {
+                val target = DanmakuView(drawingContext!!)
+                val token = ++generation
+                view = target // failed/partial addView is also removable by clear()
+                target.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                // The app owns receipt-relative delay, including time spent waiting for the Window.
+                target.updatePreferences(options.copy(opacity = 1f, delayMs = 0L))
+                manager!!.addView(target, parameters())
+                ingress = OverlayIngress(
+                    now = SystemClock::elapsedRealtime,
+                    ready = { OverlayIngress.ready(target.isAttachedToWindow, target.width, target.height, target.isShown, target.windowVisibility == View.VISIBLE) },
+                    allowed = { generation == token && view === target && sessionAllowed() },
+                    schedule = { callback, wait -> handler.postDelayed(callback, wait); Unit },
+                    cancel = { callback -> handler.removeCallbacks(callback) },
+                    deliver = { target.addComment(it) },
+                    invalid = { if (generation == token && view === target) { clear(); failed() } }
+                )
             }
-            target.addComment(value)
+            ingress?.offer(value, options.delayMs, receivedAt)
         } catch (_: RuntimeException) { clear(); failed() }
     }
     private fun parameters(): WindowManager.LayoutParams = WindowManager.LayoutParams(
