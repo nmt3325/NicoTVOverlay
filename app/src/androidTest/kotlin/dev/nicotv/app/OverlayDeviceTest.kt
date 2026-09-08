@@ -105,6 +105,25 @@ class OverlayDeviceTest {
         save("cleared.png")
     }
 
+    @Test fun thirtySecondDelayRendersWithTheActualWindow() {
+        val baseline = countNow()
+        var receivedAt = 0L
+        instrumentation.runOnMainSync {
+            overlay.preferences(OverlayPreferences(opacity = 0.8f, showFixed = true, delayMs = 30_000L))
+            receivedAt = SystemClock.elapsedRealtime()
+            overlay.comment(testComment("synthetic:30-second-delay"))
+        }
+        SystemClock.sleep(1000)
+        assertTrue("Delayed comment must not appear immediately", countNow() <= baseline + 20)
+        val remaining = receivedAt + 30_000L - SystemClock.elapsedRealtime()
+        if (remaining > 0) SystemClock.sleep(remaining)
+        awaitPixels("30-second-delay") { it > baseline + 100 }
+        assertFalse("Window must remain authorized while waiting", failed.get())
+        save("30-second-delay.png")
+        instrumentation.runOnMainSync { overlay.clear() }
+        awaitPixels("clear-after-delay") { it <= baseline + 20 }
+    }
+
     @Test fun clearBeforeFirstLayoutDoesNotReplayPendingComment() {
         val baseline = countNow()
         instrumentation.runOnMainSync {
