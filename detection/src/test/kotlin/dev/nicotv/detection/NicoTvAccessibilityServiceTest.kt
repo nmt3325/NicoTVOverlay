@@ -35,9 +35,17 @@ class FreshRootAccessibilityShadow : ShadowAccessibilityService() {
     @Implementation protected fun setServiceInfo(info: android.accessibilityservice.AccessibilityServiceInfo) { configuredInfo = info }
     @Implementation protected fun getServiceInfo(): android.accessibilityservice.AccessibilityServiceInfo? = configuredInfo
     @Implementation protected fun getRootInActiveWindow(): AccessibilityNodeInfo? { reads++; return rootFactory() }
+    @Implementation(minSdk = 33) protected fun getRootInActiveWindow(prefetchingStrategy: Int): AccessibilityNodeInfo? {
+        check(prefetchingStrategy == 0); reads++; return rootFactory()
+    }
+    @Implementation protected override fun getWindows(): List<android.view.accessibility.AccessibilityWindowInfo> {
+        windowReads++; return windowsFactory()
+    }
     companion object {
         var rootFactory: () -> AccessibilityNodeInfo? = { null }
+        var windowsFactory: () -> List<android.view.accessibility.AccessibilityWindowInfo> = { emptyList() }
         var reads = 0
+        var windowReads = 0
     }
 }
 
@@ -163,4 +171,30 @@ class NicoTvAccessibilityServiceTest {
         advance(999); assertEquals("jk1", selected())
         advance(1); assertNull(selected()) // Exact evidence deadline, not rounded to a heartbeat.
     }
+    @Test fun `feedback interrupt requires Stop Start but not system rebind`() {
+        confirm(); service.onInterrupt(); assertNull(selected())
+        val reads = FreshRootAccessibilityShadow.reads
+        prefs.edit().putString(PreferenceContract.CUSTOM_ALIASES, "{}").commit()
+        event(); advance(5000)
+        assertNull(selected()); assertEquals(reads, FreshRootAccessibilityShadow.reads)
+        prefs.edit().putBoolean(PreferenceContract.SESSION_ACTIVE, false).commit(); advance(0)
+        prefs.edit().putBoolean(PreferenceContract.SESSION_ACTIVE, true).commit(); advance(0)
+        advance(749); assertNull(selected()); advance(1); assertEquals("jk1", selected())
+    }
+    @Test fun `interrupted pending generation cannot return after malformed settings are repaired`() {
+        configure(); advance(100); service.onInterrupt()
+        val reads = FreshRootAccessibilityShadow.reads
+        prefs.edit().putInt(PreferenceContract.LIVE_RESOURCE_IDS, 42).commit(); advance(0)
+        prefs.edit().putString(PreferenceContract.LIVE_RESOURCE_IDS, "test.tv:id/live").commit(); advance(0)
+        event(); advance(2000); assertNull(selected()); assertEquals(reads, FreshRootAccessibilityShadow.reads)
+    }
+    @Test fun `real unbind still requires real bind after Stop Start`() {
+        confirm(); service.onUnbind(Intent())
+        prefs.edit().putBoolean(PreferenceContract.SESSION_ACTIVE, false).commit(); advance(0)
+        prefs.edit().putBoolean(PreferenceContract.SESSION_ACTIVE, true).commit(); advance(0)
+        val reads = FreshRootAccessibilityShadow.reads
+        event(); advance(1000); assertNull(selected()); assertEquals(reads, FreshRootAccessibilityShadow.reads)
+        service.onServiceConnected(); advance(750); assertEquals("jk1", selected())
+    }
+
 }

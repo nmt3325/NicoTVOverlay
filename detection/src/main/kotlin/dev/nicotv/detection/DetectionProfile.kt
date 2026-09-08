@@ -14,6 +14,7 @@ internal object DetectionLimits {
     const val MAX_TEXT_CHARS = 4096
     const val MIN_SCAN_MS = 250L
     const val HEARTBEAT_MS = 1000L
+    const val GUARD_TTL_MS = 2500L
     const val DEBOUNCE_MS = 750L
     const val EVIDENCE_TTL_MS = 30_000L
 }
@@ -54,6 +55,9 @@ internal data class DetectionProfile(
 ) {
     val enabled: Boolean get() = sessionActive && mode == PreferenceContract.MODE_ACCESSIBILITY &&
         valid && packages.isNotEmpty() && stationIds.isNotEmpty() && liveIds.isNotEmpty()
+    val guardEnabled: Boolean get() = sessionActive && mode == PreferenceContract.MODE_BRAVIA &&
+        valid && packages.isNotEmpty() && liveIds.isNotEmpty()
+    val collecting: Boolean get() = enabled || guardEnabled
 
     companion object {
         private val packagePattern = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+")
@@ -63,6 +67,17 @@ internal data class DetectionProfile(
 
         fun parse(active: Boolean, mode: String, packages: String, stationIds: String,
                   liveIds: String, customAliases: String): DetectionProfile {
+            if (mode == PreferenceContract.MODE_BRAVIA) {
+                // Foreground guard only: station OSD/aliases are deliberately not parsed or required.
+                val bounded = packages.length <= 16_384 && liveIds.length <= 16_384
+                val pkgs = if (bounded) entries(packages) else emptySet()
+                val markers = if (bounded) entries(liveIds) else emptySet()
+                val valid = bounded && pkgs.size <= 32 && markers.size <= 16 &&
+                    pkgs.all { packagePattern.matches(it) } && markers.all {
+                        idPattern.matchEntire(it)?.groupValues?.get(1) in pkgs
+                    }
+                return DetectionProfile(active, mode, pkgs, emptySet(), markers, emptyMap(), valid)
+            }
             var valid = listOf(packages, stationIds, liveIds, customAliases).all { it.length <= 16_384 }
             // Do not partially apply malformed/oversized settings.
             val pkgs = if (valid) entries(packages) else emptySet()
