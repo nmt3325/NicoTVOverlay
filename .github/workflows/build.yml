@@ -36,7 +36,21 @@ jobs:
             printf 'ANDROID_USER_HOME=%s\n' "$android_user_home" >> "$GITHUB_ENV"
           fi
       - name: Test, lint and build APKs
-        run: ./gradlew --no-daemon :core:test :comment-client:test :detection:testDebugUnitTest :overlay:testDebugUnitTest :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleRelease
+        run: >-
+          ./gradlew --no-daemon :core:test :comment-client:test
+          :detection:testDebugUnitTest :detection:lintDebug
+          :overlay:testDebugUnitTest :overlay:lintDebug
+          :app:testDebugUnitTest :app:lintDebug
+          :app:assembleDebug :app:assembleRelease
+          :app:assembleDebugAndroidTest :tv-fixture:assembleDebug
+      - name: Verify bundled upstream license
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          with ZipFile('app/build/outputs/apk/debug/app-debug.apk') as apk:
+              assert apk.read('third-party-licenses/nicolive-comment-protobuf.txt') == Path('comment-client/src/main/proto/LICENSE').read_bytes()
+          PY
       - name: Upload installable debug APK
         uses: actions/upload-artifact@v4
         with:
@@ -49,6 +63,15 @@ jobs:
         with:
           name: NicoTVOverlay-release-unsigned-${{ github.sha }}
           path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload device QA APKs (compiled, not executed in this workflow)
+        uses: actions/upload-artifact@v4
+        with:
+          name: NicoTVOverlay-device-tests-${{ github.sha }}
+          path: |
+            app/build/outputs/apk/androidTest/debug/*.apk
+            tv-fixture/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 30
       - name: Upload verification reports
