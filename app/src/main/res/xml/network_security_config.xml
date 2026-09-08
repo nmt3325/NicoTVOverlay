@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+ <!-- Dynamic user-configured RFC1918 TV addresses need HTTP. The BRAVIA adapter
+      independently validates numeric private IPv4 and disables redirects.
+      Comment clients accept only their validated HTTPS/WSS service hosts. -->
+ <base-config cleartextTrafficPermitted="true"><trust-anchors><certificates src="system" /></trust-anchors></base-config>
+</network-security-config>

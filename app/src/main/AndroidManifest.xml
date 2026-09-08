@@ -1,9 +1,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
  <uses-feature android:name="android.software.leanback" android:required="true" />
  <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
- <application android:icon="@drawable/ic_app" android:banner="@drawable/tv_banner" android:label="NicoTVOverlay" android:theme="@android:style/Theme.Material.NoActionBar" android:allowBackup="false" android:supportsRtl="true">
+ <uses-permission android:name="android.permission.INTERNET" />
+ <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+ <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+ <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+ <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+ <application android:name=".NicoTvApplication" android:icon="@drawable/ic_app" android:banner="@drawable/tv_banner"
+  android:label="NicoTVOverlay" android:theme="@style/AppTheme" android:allowBackup="false"
+  android:fullBackupContent="false" android:dataExtractionRules="@xml/data_extraction_rules"
+  android:networkSecurityConfig="@xml/network_security_config" android:supportsRtl="true">
   <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="landscape">
    <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LEANBACK_LAUNCHER" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
   </activity>
+  <service android:name=".OverlayService" android:exported="false" android:foregroundServiceType="specialUse">
+   <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-started live TV commentary overlay during an explicitly started viewing session, with visible status and immediate stop controls. No boot autostart." />
+  </service>
  </application>
 </manifest>
