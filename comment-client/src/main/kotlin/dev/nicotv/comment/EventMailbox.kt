@@ -14,8 +14,9 @@ internal class EventMailbox(private val wallMs: () -> Long) {
     private var generation = 0L
     private var finished = false
 
-    @Synchronized fun begin(state: StreamEvent.State): Long {
-        check(!finished)
+    /** Null means no attempt may start. This decision and the epoch update are atomic with close/finish. */
+    @Synchronized fun begin(state: StreamEvent.State): Long? {
+        if (finished) return null
         generation++
         updateState(state)
         return generation

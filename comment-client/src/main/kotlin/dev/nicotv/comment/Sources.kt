@@ -64,7 +64,10 @@ private fun sourceFlow(
                 while (currentCoroutineContext().isActive) {
                     val since = options.monoMs()
                     val cutoff = options.wallMs() - 1000
-                    val epoch = output.begin(StreamEvent.State(ConnectionState.RESOLVING, "現在の実況番組を確認中", origin))
+                    val epoch = output.begin(StreamEvent.State(ConnectionState.RESOLVING, "現在の実況番組を確認中", origin)) ?: break
+                    // Cancellation can win even when the collector's close is still queued.
+                    // The atomic no-start result above handles the opposite ordering.
+                    currentCoroutineContext().ensureActive()
                     val failure = try {
                         attempt(gate, cutoff) {
                             currentCoroutineContext().ensureActive()

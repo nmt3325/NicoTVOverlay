@@ -31,7 +31,7 @@ class ReviewRegressionTest {
     }
 
     @Test fun mailboxNeverEvictsLiveAndBoundsOnlyComments() = runTest {
-        val output = EventMailbox { BASE }; val epoch = output.begin(state(ConnectionState.RESOLVING))
+        val output = EventMailbox { BASE }; val epoch = requireNotNull(output.begin(state(ConnectionState.RESOLVING)))
         output.offer(epoch, state(ConnectionState.CONNECTING)); output.offer(epoch, state(ConnectionState.LIVE))
         repeat(2000) { output.offer(epoch, comment("$it")) }; output.finish()
         assertEquals(ConnectionState.LIVE, (output.next() as StreamEvent.State).state)
@@ -41,11 +41,11 @@ class ReviewRegressionTest {
         output.close()
     }
     @Test fun controlTransitionAndGenerationFenceCannotResurrectOldComments() = runTest {
-        val output = EventMailbox { BASE }; val old = output.begin(state(ConnectionState.LIVE))
+        val output = EventMailbox { BASE }; val old = requireNotNull(output.begin(state(ConnectionState.LIVE)))
         repeat(2000) { output.offer(old, comment("old:$it")) }
         output.offer(old, state(ConnectionState.RECONNECTING)); output.offer(old, comment("late-during-reconnect"))
         assertEquals(ConnectionState.RECONNECTING, (output.next() as StreamEvent.State).state)
-        val fresh = output.begin(state(ConnectionState.CONNECTING)); output.offer(fresh, state(ConnectionState.LIVE))
+        val fresh = requireNotNull(output.begin(state(ConnectionState.CONNECTING))); output.offer(fresh, state(ConnectionState.LIVE))
         output.offer(old, comment("late-old-producer")); output.offer(old, state(ConnectionState.ERROR))
         output.offer(fresh, comment("new"))
         assertEquals(ConnectionState.LIVE, (output.next() as StreamEvent.State).state)
@@ -55,7 +55,7 @@ class ReviewRegressionTest {
         assertNull(output.next()); output.close()
     }
     @Test fun stalledCollectorDoesNotReceiveExpiredBacklog() = runTest {
-        var now = BASE; val output = EventMailbox { now }; val epoch = output.begin(state(ConnectionState.LIVE))
+        var now = BASE; val output = EventMailbox { now }; val epoch = requireNotNull(output.begin(state(ConnectionState.LIVE)))
         output.offer(epoch, comment("old")); assertTrue(output.next() is StreamEvent.State)
         now += 20001; output.finish(); assertNull(output.next()); output.close()
     }
