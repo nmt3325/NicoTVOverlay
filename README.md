@@ -47,6 +47,8 @@ mainへのpush、pull request、手動実行でテスト・lint・APKビルド�
 
 `tv-fixture`は自動選局を検証する別APKです。実放送・チューナー・動画プレイヤーではありません。端末内の合成デモも公式コメントの受信確認とは区別します。
 
+今回の実行結果と未検証範囲は[検証記録](docs/VALIDATION.md)を参照してください。
+
 ## 設計・調査
 
 - [公式コメントAPIと受信方式](docs/research/comment-api.md)
