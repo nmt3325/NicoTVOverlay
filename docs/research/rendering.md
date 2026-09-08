@@ -20,7 +20,7 @@ Reference inspected: [NCOverlay renderer.ts, pinned a41a03be8443ce850780e1121fe9
 
 | Input | Policy |
 | --- | --- |
-| fontScale | 0.75–2; non-finite → 1 |
+| fontScale | 0.6–2, matching settings UI/validator; non-finite → 1 |
 | opacity | 0–1; non-finite → 0.8; zero admits no comments |
 | speed | 0.5–3; non-finite → 1 |
 | maxVisible | 0–120; zero disables admission |
@@ -32,9 +32,9 @@ Reference inspected: [NCOverlay renderer.ts, pinned a41a03be8443ce850780e1121fe9
 | raw text | reject more than 2,048 UTF-16 units before expensive work |
 | displayed text | first 160 Unicode code points plus ellipsis; never split surrogate pairs |
 | measured width | reject scroll wider than 3 safe widths; fixed wider than one safe width |
-| NG | first 64 entries; bounded normalized 64-code-point terms |
+| NG | first 100 input entries; each up to 100 UTF-16 units, normalized in full without shortening or added ellipsis |
 
-Text normalization collapses whitespace/newlines into spaces, removes control and format characters (including bidi controls), preserves emoji ZWJ/ZWNJ and variation/combining marks, replaces invalid isolated surrogates, and uses Unicode NFC. NG is **case-sensitive, NFC-normalized, literal substring matching** against displayed normalized text. No regex, locale-dependent case folding, NFKC/full-width folding or HTML parsing. Empty normalized NG entries are ignored. Text processing, matching, queue sizes and geometry work are bounded. Already-allocated upstream strings/lists are outside this module, but huge inputs are neither copied wholesale nor retained here.
+Text normalization collapses whitespace/newlines into spaces, removes control and format characters (including bidi controls), preserves emoji ZWJ/ZWNJ and variation/combining marks, replaces invalid isolated surrogates, and uses Unicode NFC. NG is **case-sensitive, NFC-normalized, literal substring matching** against the bounded full normalized comment, before display-only shortening. Legal settings input is 100 entries of up to 100 UTF-16 units (`String.length`), not code points; every such rule is honored without truncation or a synthetic ellipsis. Null/empty/normalization-empty entries and raw rules over 100 UTF-16 units are ignored rather than converted into different rules; only the first 100 input entries are inspected. Unicode NFC can expand some characters, so matching precedes the 160-code-point display limit and that limit is applied after NFC. No regex, locale-dependent case folding, NFKC/full-width folding or HTML parsing. Empty normalized NG entries are ignored. Text processing, matching, queue sizes and geometry work are bounded. Already-allocated upstream strings/lists are outside this module, but huge inputs are neither copied wholesale nor retained here.
 
 Changing sanitized preferences clears displayed, pending and dedupe state when values differ, rather than moving existing comments into possible collisions. A resolution, density or system font-scale change clears/recomputes geometry. `clearComments()` unconditionally clears all three stores.
 
@@ -48,6 +48,6 @@ The renderer sets no layer/window alpha; the app must separately obey Android's 
 
 ## Verification boundary
 
-Pure JUnit exercises lifetime, entry/catch-up collision, dense mixed-position traffic, color/size, TOP/BOTTOM competition, Unicode/oversize text, bounded queues/dedupe, receive-relative delay, late TTL, clear, malformed preferences/times and safe resize. Robolectric uses a native Canvas to verify transparent pixels, white fill/black outline and safe top inset; lifecycle tests cover empty/expired no-loop, fixed one-shot wakes, hidden/detached states, delayed clear, worker ingress and font/resolution changes.
+Pure JUnit exercises lifetime, entry/catch-up collision, dense mixed-position traffic, color/size, TOP/BOTTOM competition, Unicode/oversize text, bounded queues/dedupe, receive-relative delay, late TTL, clear, malformed preferences/times and safe resize. Settings regression coverage includes the 64th/65th/100th NG entries, 64/65/100 UTF-16 lengths, all 100×100 valid rules, supplementary emoji/ZWJ/NFC expansion, invalid/empty rule handling, and every integer font percentage from 60 through 200 including measured glyph sizes. Robolectric uses a native Canvas to verify transparent pixels, white fill/black outline and safe top inset; lifecycle tests cover empty/expired no-loop, fixed one-shot wakes, hidden/detached states, delayed clear, worker ingress and font/resolution changes.
 
 Automated pixel/geometry tests are not human visual verification. This implementer has not operated the shared TV emulator or verified OEM/physical-TV typography, compositor behavior, frame pacing or viewing-distance readability. Parent integration must visually inspect Japanese mixed-size scrolling, TOP/BOTTOM, white and colored text over both bright/dark video at TV resolution, and confirm no clipping/overlap, adequate breathing room, transparent idle frames and no stale burst after hide/reattach. No screenshots or fixture UI are presented as real tuner validation.

@@ -55,6 +55,9 @@ internal class DanmakuEngine(private val measurer: TextMeasurer) {
         const val MAX_DEDUPE = 1024
         const val MAX_RAW_UTF16 = 2048
         const val MAX_TEXT_CODE_POINTS = 160
+        // Match the settings UI/validator; length is Kotlin String.length (UTF-16 units).
+        const val MAX_NG_WORDS = 100
+        const val MAX_NG_WORD_UTF16 = 100
         const val MAX_DELAY_MS = 30_000L
         const val PENDING_TTL_MS = 5_000L // maximum lateness AFTER the requested due time
         const val DEDUPE_TTL_MS = 60_000L
@@ -66,23 +69,41 @@ internal class DanmakuEngine(private val measurer: TextMeasurer) {
             (if (value.isFinite()) value else fallback).coerceIn(low, high)
 
         fun sanitizePreferences(value: OverlayPreferences): OverlayPreferences = value.copy(
-            fontScale = finite(value.fontScale, 1f, 0.75f, 2f),
+            fontScale = finite(value.fontScale, 1f, 0.6f, 2f),
             opacity = finite(value.opacity, 0.8f, 0f, 1f),
             speed = finite(value.speed, 1f, 0.5f, 3f),
             maxVisible = value.maxVisible.coerceIn(0, MAX_VISIBLE),
             delayMs = value.delayMs.coerceIn(0L, MAX_DELAY_MS),
-            ngWords = value.ngWords.asSequence().take(64)
-                .mapNotNull { normalizeText(it, 64) }.distinct().toList(),
+            ngWords = normalizeNgWords(value.ngWords),
         )
 
+        // Widen element nullability before mapping: Java callers can violate Kotlin generics.
+        private fun normalizeNgWords(raw: List<String?>): List<String> =
+            raw.asSequence().take(MAX_NG_WORDS).mapNotNull { normalizeNgWord(it) }.distinct().toList()
+
+        /** A matching rule is normalized in full, never shortened or given an ellipsis. */
+        private fun normalizeNgWord(raw: String?): String? {
+            if (raw == null || raw.length > MAX_NG_WORD_UTF16) return null
+            return normalizeLiteralText(raw)
+        }
+
+        /** Display-only shortening is separate from literal NG matching. */
+        fun normalizeText(raw: String, maxCodePoints: Int = MAX_TEXT_CODE_POINTS): String? =
+            normalizeLiteralText(raw)?.let { shortenForDisplay(it, maxCodePoints) }
+
+        private fun shortenForDisplay(text: String, maxCodePoints: Int = MAX_TEXT_CODE_POINTS): String {
+            val limit = maxCodePoints.coerceIn(1, MAX_TEXT_CODE_POINTS)
+            if (text.codePointCount(0, text.length) <= limit) return text
+            return text.substring(0, text.offsetByCodePoints(0, limit)) + '\u2026'
+        }
+
         /** NFC, case-sensitive, single-line literal text; preserve emoji ZWJ/variation marks. */
-        fun normalizeText(raw: String, maxCodePoints: Int = MAX_TEXT_CODE_POINTS): String? {
+        private fun normalizeLiteralText(raw: String): String? {
             if (raw.isEmpty() || raw.length > MAX_RAW_UTF16) return null
-            val out = StringBuilder(min(raw.length, maxCodePoints * 2))
+            val out = StringBuilder(raw.length)
             var offset = 0
-            var count = 0
             var space = false
-            while (offset < raw.length && count < maxCodePoints) {
+            while (offset < raw.length) {
                 var cp = raw.codePointAt(offset)
                 offset += Character.charCount(cp)
                 if (cp in 0xD800..0xDFFF) cp = 0xFFFD // unpaired surrogate
@@ -93,16 +114,11 @@ internal class DanmakuEngine(private val measurer: TextMeasurer) {
                 if (Character.isISOControl(cp) ||
                     (Character.getType(cp) == Character.FORMAT.toInt() && cp != 0x200C && cp != 0x200D)
                 ) continue
-                if (space && count < maxCodePoints - 1) {
-                    out.append(' ')
-                    count++
-                }
+                if (space) out.append(' ')
                 space = false
                 out.appendCodePoint(cp)
-                count++
             }
             if (out.isEmpty()) return null
-            if (offset < raw.length) out.append('\u2026')
             return Normalizer.normalize(out.toString(), Normalizer.Form.NFC)
         }
 
@@ -198,8 +214,9 @@ internal class DanmakuEngine(private val measurer: TextMeasurer) {
             (!preferences.showFixed && comment.position != CommentPosition.SCROLL) ||
             comment.id.length > MAX_ID_UTF16
         ) return false
-        val text = normalizeText(comment.text) ?: return false
-        if (preferences.ngWords.any { text.contains(it, ignoreCase = false) }) return false
+        val normalized = normalizeLiteralText(comment.text) ?: return false
+        if (preferences.ngWords.any { normalized.contains(it, ignoreCase = false) }) return false
+        val text = shortenForDisplay(normalized)
         pruneDedupe(now)
         // Empty identifiers are not deduplicated: identical live reactions are valid comments.
         val key = if (comment.id.isBlank()) null else "${comment.origin.name}:${comment.id}"

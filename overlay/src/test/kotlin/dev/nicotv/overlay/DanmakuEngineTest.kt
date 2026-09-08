@@ -124,9 +124,9 @@ class DanmakuEngineTest {
         assertEquals(1f, p.speed, 0f)
         assertEquals(120, p.maxVisible)
         assertEquals(30_000L, p.delayMs)
-        assertEquals(64, p.ngWords.size)
+        assertEquals(100, p.ngWords.size)
         val low = DanmakuEngine.sanitizePreferences(OverlayPreferences(-1f, -1f, -1f, -9, Long.MIN_VALUE))
-        assertEquals(0.75f, low.fontScale, 0f)
+        assertEquals(0.6f, low.fontScale, 0f)
         assertEquals(0f, low.opacity, 0f)
         assertEquals(0.5f, low.speed, 0f)
         assertEquals(0, low.maxVisible)
@@ -141,6 +141,101 @@ class DanmakuEngineTest {
         assertFalse(e.add(comment("2", "e\u0301"), 0))
         assertTrue(e.add(comment("3", "anything"), 0))
         assertFalse(e.add(comment("4", ".*"), 0))
+    }
+
+    @Test fun allAcceptedNgEntryBoundariesBlockBeforeQueuingOrDrawing() {
+        val e = engine()
+        val rules = List(100) { "rule-${it.toString().padStart(3, '0')}-end" }
+        e.updatePreferences(OverlayPreferences(ngWords = rules))
+        assertEquals(rules, e.preferences.ngWords)
+        for (index in listOf(63, 64, 99)) {
+            assertFalse("NG entry ${index + 1}", e.add(comment("rule$index", rules[index]), 0))
+        }
+        assertEquals(0, e.pendingCount)
+        assertEquals(0, e.dedupeCount)
+        e.advance(0)
+        assertTrue(e.visible.isEmpty())
+        assertTrue(e.add(comment("allowed", "unrelated"), 0))
+        e.advance(0)
+        assertEquals("unrelated", e.visible.single().text)
+    }
+
+    @Test fun legalNgLengthsAreNotTruncatedOrGivenSyntheticEllipses() {
+        for (length in listOf(64, 65, 100)) {
+            val e = engine()
+            val rule = "x".repeat(length)
+            e.updatePreferences(OverlayPreferences(ngWords = listOf(rule)))
+            assertEquals(listOf(rule), e.preferences.ngWords)
+            assertFalse(e.add(comment(text = rule), 0))
+            e.advance(0)
+            assertFalse(e.hasWork)
+            assertTrue(e.add(comment("shorter", rule.dropLast(1)), 0))
+        }
+    }
+
+    @Test fun everyRuleInAFullHundredByHundredSettingsPayloadIsHonored() {
+        val e = engine()
+        val rules = List(100) { "${it.toString().padStart(3, '0')}:" + "あ".repeat(96) }
+        assertTrue(rules.all { it.length == 100 })
+        e.updatePreferences(OverlayPreferences(ngWords = rules))
+        assertEquals(rules, e.preferences.ngWords)
+        rules.forEachIndexed { index, rule -> assertFalse(e.add(comment("full$index", rule), 0)) }
+        e.advance(0)
+        assertFalse(e.hasWork)
+    }
+
+    @Test fun ngUtf16AndUnicodeNormalizationStayLiteralAtTheBoundary() {
+        val inputs = listOf("字".repeat(100), "😀".repeat(50), "👩‍💻".repeat(20),
+            "e\u0301".repeat(50), "\u0344".repeat(100))
+        for (raw in inputs) {
+            assertEquals(100, raw.length)
+            val e = engine()
+            val nfc = java.text.Normalizer.normalize(raw, java.text.Normalizer.Form.NFC)
+            e.updatePreferences(OverlayPreferences(ngWords = listOf(raw)))
+            assertEquals(listOf(nfc), e.preferences.ngWords)
+            assertFalse(e.add(comment(text = raw), 0))
+            assertFalse(e.add(comment("canonical", nfc), 0))
+            e.advance(0)
+            assertFalse(e.hasWork)
+        }
+        // NFC can expand 100 UTF-16 units to 200 code points; still match the full rule.
+        val displayed = DanmakuEngine.normalizeText("\u0344".repeat(100))!!
+        assertEquals(161, displayed.codePointCount(0, displayed.length))
+        val e = engine()
+        e.updatePreferences(OverlayPreferences(ngWords = listOf("  日本\n語\u202E  ", "\uD800")))
+        assertEquals(listOf("日本 語", "\uFFFD"), e.preferences.ngWords)
+        assertFalse(e.add(comment(text = "日本\t語"), 0))
+        assertFalse(e.add(comment("invalid-surrogate", "\uD800"), 0))
+    }
+
+    @Test fun invalidNgRulesAreRejectedNotTurnedIntoDifferentMatchingRules() {
+        val e = engine()
+        @Suppress("UNCHECKED_CAST")
+        val invalid = listOf(null, "", " \n\u0000\u202E", "x".repeat(101),
+            "😀".repeat(51), "z".repeat(5000), "literal…") as List<String>
+        e.updatePreferences(OverlayPreferences(ngWords = invalid))
+        assertEquals(listOf("literal…"), e.preferences.ngWords)
+        assertTrue(e.add(comment(text = "x".repeat(100)), 0))
+        assertTrue(e.add(comment("without-ellipsis", "literal"), 0))
+        assertFalse(e.add(comment("with-ellipsis", "literal…"), 0))
+        val overCount = List(101) { "[word$it]" }
+        e.updatePreferences(OverlayPreferences(ngWords = overCount))
+        assertEquals(overCount.take(100), e.preferences.ngWords)
+        assertTrue(e.add(comment(text = overCount.last()), 0))
+    }
+
+    @Test fun everyAcceptedFontPercentageReachesMeasuredGlyphSize() {
+        val e = engine()
+        for (percent in 60..200) {
+            val scale = percent / 100f
+            e.updatePreferences(OverlayPreferences(fontScale = scale))
+            assertEquals(scale, e.preferences.fontScale, 0f)
+            assertTrue(e.add(comment("font$percent", "字幕"), 0))
+            e.advance(0)
+            assertEquals("font $percent%", 45f * scale, e.visible.single().sizePx, 0.001f)
+        }
+        assertEquals(0.6f, DanmakuEngine.sanitizePreferences(OverlayPreferences(fontScale = 0.59f)).fontScale, 0f)
+        assertEquals(2f, DanmakuEngine.sanitizePreferences(OverlayPreferences(fontScale = 2.01f)).fontScale, 0f)
     }
 
     @Test fun settingsResizeAndSystemScaleClearGeometryAndFutureQueue() {
