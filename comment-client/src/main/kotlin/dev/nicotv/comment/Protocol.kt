@@ -113,7 +113,7 @@ internal fun hasInvalidUnicode(text: String): Boolean {
     var i = 0
     while (i < text.length) {
         val c = text[i++]
-        if (c == '\uFFFD') return true
+        // U+FFFD is a valid scalar, not evidence of malformed bytes (use strictUtf8 for bytes).
         if (c.isHighSurrogate()) {
             if (i == text.length || !text[i++].isLowSurrogate()) return true
         } else if (c.isLowSurrogate()) return true

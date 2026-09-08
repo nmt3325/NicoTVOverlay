@@ -103,7 +103,14 @@ class SessionTest {
         } }
         val events = mutableListOf<StreamEvent>(); val job = collect(NicoLiveCommentSource(wire, options()), events, slow = true)
         advanceTimeBy(5000); runCurrent(); val comments = events.filterIsInstance<StreamEvent.Comment>()
-        assertTrue(comments.size in 1..256); assertEquals("lv1:2000", comments.last().comment.id); job.cancelAndJoin()
+        assertTrue(comments.size in 1..256); assertEquals("lv1:2000", comments.last().comment.id)
+        assertEquals(ConnectionState.LIVE, events.filterIsInstance<StreamEvent.State>().last().state)
+        var state = ConnectionState.IDLE
+        for (event in events) when (event) {
+            is StreamEvent.State -> state = event.state
+            is StreamEvent.Comment -> assertEquals("LIVE must precede every delivered comment", ConnectionState.LIVE, state)
+        }
+        job.cancelAndJoin(); assertEquals(0, wire.activeReads); assertTrue(wire.sockets.all { it.second.closed })
     }
     @Test fun nxThreadHandshakeNoHistoryAndProvenanceRemainSeparate() = runTest {
         val wire = FakeWire(); wire.onSocket = { url, s -> s.onSend = { sent ->

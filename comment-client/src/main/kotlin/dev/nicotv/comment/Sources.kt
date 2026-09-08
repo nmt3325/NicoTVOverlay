@@ -2,7 +2,6 @@ package dev.nicotv.comment
 
 import dev.nicotv.core.*
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.*
 import okhttp3.OkHttpClient
 
@@ -53,25 +52,43 @@ private fun sourceFlow(
     origin: CommentOrigin,
     options: CommentOptions,
     attempt: suspend (CommentGate, Long, EmitEvent) -> Unit,
-): Flow<StreamEvent> = channelFlow {
-    val gate = CommentGate()
-    var failures = 0
-    while (currentCoroutineContext().isActive) {
-        val since = options.monoMs()
-        val cutoff = options.wallMs() - 1000
-        send(StreamEvent.State(ConnectionState.RESOLVING, "現在の実況番組を確認中", origin))
-        val failure = try {
-            attempt(gate, cutoff) { send(it) }
-            StreamFailure()
-        } catch (e: Exception) {
-            // Do not turn collection cancellation into a reconnect (including IO cancellation races).
-            currentCoroutineContext().ensureActive()
-            e as? StreamFailure ?: (e.cause as? StreamFailure) ?: StreamFailure()
+): Flow<StreamEvent> = flow {
+    // Emit only from the collecting coroutine: no hidden channelFlow/flowOn output buffer
+    // can hold an old comment while a newer terminal/control state is pending.
+    coroutineScope {
+        val output = EventMailbox(options.wallMs)
+        val producer = launch(options.dispatcher) {
+            try {
+                val gate = CommentGate()
+                var failures = 0
+                while (currentCoroutineContext().isActive) {
+                    val since = options.monoMs()
+                    val cutoff = options.wallMs() - 1000
+                    val epoch = output.begin(StreamEvent.State(ConnectionState.RESOLVING, "現在の実況番組を確認中", origin))
+                    val failure = try {
+                        attempt(gate, cutoff) {
+                            currentCoroutineContext().ensureActive()
+                            output.offer(epoch, it)
+                        }
+                        StreamFailure()
+                    } catch (e: Exception) {
+                        currentCoroutineContext().ensureActive()
+                        e as? StreamFailure ?: (e.cause as? StreamFailure) ?: StreamFailure()
+                    }
+                    output.offer(epoch, StreamEvent.State(failure.state, failure.safeMessage, origin))
+                    if (failure.terminal) break
+                    if (options.monoMs() - since >= 60000) failures = 0
+                    delay(options.retry.delayMs(failures, failure.waitMs))
+                    failures = (failures + 1).coerceAtMost(16)
+                }
+            } finally { output.finish() }
         }
-        send(StreamEvent.State(failure.state, failure.safeMessage, origin))
-        if (failure.terminal) break
-        if (options.monoMs() - since >= 60000) failures = 0
-        delay(options.retry.delayMs(failures, failure.waitMs))
-        failures = (failures + 1).coerceAtMost(16)
+        try {
+            while (true) emit(output.next() ?: break)
+        } finally {
+            producer.cancel()
+            output.close()
+        }
+        // coroutineScope joins the producer and all socket/HTTP children on every exit.
     }
-}.buffer(256, BufferOverflow.DROP_OLDEST).flowOn(options.dispatcher)
+}
