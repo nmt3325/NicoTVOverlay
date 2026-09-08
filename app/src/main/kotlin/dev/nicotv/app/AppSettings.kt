@@ -24,6 +24,7 @@ data class AppSettings(
 ) {
     val calibrated: Boolean get() = SettingsValidator.entries(tvPackages).isNotEmpty() &&
         SettingsValidator.entries(osdIds).isNotEmpty() && SettingsValidator.entries(liveIds).isNotEmpty()
+    val braviaVisibilityCalibrated: Boolean get() = SettingsValidator.entries(tvPackages).isNotEmpty() && SettingsValidator.entries(liveIds).isNotEmpty()
     val modeLabel: String get() = when (mode) {
         PreferenceContract.MODE_ACCESSIBILITY -> "自動OSD"
         PreferenceContract.MODE_BRAVIA -> "BRAVIA・実験"

@@ -7,6 +7,7 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -79,8 +80,26 @@ class MainActivity : Activity() {
         setContentView(root)
         showPage("視聴")
         scope.launch { RuntimeSession.state.collect { updateStatus(it) } }
+        scope.launch { while (isActive) { delay(250); checkActivityDisplay() } }
     }
-    override fun onResume() { super.onResume(); visible = true; updateStatus(RuntimeSession.state.value); updatePermissionText() }
+    override fun onResume() {
+        super.onResume(); visible = true
+        if (!PlatformPermissions.defaultTarget(this) && RuntimeSession.state.value.active) ServiceCommands.stop(this)
+        updateStatus(RuntimeSession.state.value); updatePermissionText()
+    }
+    override fun onConfigurationChanged(configuration: Configuration) {
+        super.onConfigurationChanged(configuration)
+        checkActivityDisplay()
+    }
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        checkActivityDisplay()
+    }
+    private fun checkActivityDisplay() {
+        if (::repository.isInitialized && visible && RuntimeSession.state.value.active && !PlatformPermissions.defaultTarget(this)) {
+            ServiceCommands.stop(this); showHint("標準画面以外は表示先を許可しません")
+        }
+    }
     override fun onPause() { visible = false; notificationStartPending = false; stopDemo(); super.onPause() }
     override fun onDestroy() { stopDemo(); scope.cancel(); super.onDestroy() }
 
@@ -116,7 +135,7 @@ class MainActivity : Activity() {
             val save = { persist(repository.read().copy(mode = mode)); showPage("視聴") }
             when (mode) {
                 PreferenceContract.MODE_ACCESSIBILITY -> confirm("自動OSDを有効にしますか？", "選択したテレビアプリの局ラベルだけを読みます。OSDとライブ表示IDの校正、および端末のユーザー補助許可が必要です。EPG・複数局・30秒経過は非表示になります。", save)
-                PreferenceContract.MODE_BRAVIA -> confirm("BRAVIA連携（実験）", "設定した私有IPへ開始後だけ接続します。PSKと局URI表が必要です。HTTPは平文です。現在、この実験モードはHome等の前面アプリを独立に確認できません。テレビ視聴を離れる前に停止してください。", save)
+                PreferenceContract.MODE_BRAVIA -> confirm("BRAVIA連携（実験）", "このテレビ本体の私有IPv4と一致するホストのみ対応します。ユーザー補助とTV_PACKAGES・LIVE_RESOURCE_IDSの校正が必須です。新鮮な前面証拠がある間だけ接続し、Homeや期限切れで停止します。HTTPは平文・実機未検証です。", save)
                 else -> save()
             }
         }
@@ -186,8 +205,8 @@ class MainActivity : Activity() {
         val live = field("LIVE_RESOURCE_IDS（package:id/live_player）", s.liveIds, multiline = true)
         val aliases = field("CUSTOM_ALIASES JSON（例：{\"地域局名\":\"jk4\"}）", s.aliasesJson, multiline = true)
         section("BRAVIA LAN連携  ·  実験")
-        paragraph("開始後のみ私有IPv4へ接続します。PSK認証と局URIの実機照合が必要です。HTTPは信頼できるLAN内のみで利用してください。Home等の前面アプリ確認は未実装です。テレビ視聴を離れる前に停止してください。", warning = true)
-        val host = field("BRAVIAホスト（例：192.168.1.20、URL・ポート不可）", s.braviaHost)
+        paragraph("テレビ本体にインストールし、この端末自身と確認できた私有IPv4のみを指定してください。ユーザー補助とTV_PACKAGES・LIVE_RESOURCE_IDS（局OSD不要）の校正が必須です。前面証拠が2.5秒以内の間だけ接続します。IP・標準画面が確認できない機種は未対応です。HTTPは平文・実機未検証です。", warning = true)
+        val host = field("BRAVIAホスト（このテレビ自身の私有IPv4、別端末不可）", s.braviaHost)
         val psk = field("PSK（空欄は保存済みの値を維持）", "", secret = true)
         psk.hint = if (vault.contains()) "暗号化して保存済み・未変更" else "未登録"
         val map = field("BRAVIA_CHANNEL_MAP JSON（{\"tv:…\":\"jk4\"}）", s.braviaMapJson, multiline = true)
@@ -245,7 +264,7 @@ class MainActivity : Activity() {
     private fun requestStart() {
         stopDemo()
         val s = repository.read()
-        val block = PlatformPermissions.startBlock(visible && hasWindowFocus(), PlatformPermissions.overlays(this), PlatformPermissions.accessibility(this), s.mode)
+        val block = PlatformPermissions.block(this, s, visible && hasWindowFocus())
         if (block != null) { showHint(block); showPage("詳細・権限"); return }
         val errors = SettingsValidator.validate(s)
         if (errors.isNotEmpty()) { showErrors(errors); return }

@@ -2,6 +2,14 @@ package dev.nicotv.app
 
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Activity
+import android.app.KeyguardManager
+import android.hardware.display.DisplayManager
+import android.os.Build
+import android.os.PowerManager
+import android.view.Display
+import android.view.WindowManager
+import java.net.NetworkInterface
+import java.net.Inet4Address
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -20,16 +28,50 @@ object PlatformPermissions {
     fun open(context: Context, intent: Intent): Boolean = try {
         context.startActivity(intent); true
     } catch (_: ActivityNotFoundException) { false } catch (_: SecurityException) { false }
-    fun startBlock(visible: Boolean, overlays: Boolean, accessibility: Boolean, mode: String): String? = when {
+    fun ownIpv4Addresses(): Set<String> = try {
+        NetworkInterface.getNetworkInterfaces()?.toList().orEmpty().filter { it.isUp && !it.isLoopback }
+            .flatMap { it.inetAddresses.toList() }.filterIsInstance<Inet4Address>()
+            .mapNotNull { it.hostAddress }.filter(SettingsValidator::isPrivateIpv4).toSet()
+    } catch (_: Exception) { emptySet() }
+    fun localHostMatches(host: String, ownAddresses: Set<String>): Boolean =
+        SettingsValidator.isPrivateIpv4(host) && host in ownAddresses
+    fun defaultDisplay(context: Context): Display? = try {
+        context.getSystemService(DisplayManager::class.java)?.getDisplay(Display.DEFAULT_DISPLAY)
+            ?.takeIf { it.isValid && it.state == Display.STATE_ON }
+    } catch (_: RuntimeException) { null }
+    fun defaultTarget(context: Context): Boolean = try {
+        val display = if (context is Activity) {
+            if (Build.VERSION.SDK_INT >= 30) context.display else context.windowManager.defaultDisplay
+        } else context.getSystemService(WindowManager::class.java)?.defaultDisplay
+        display != null && display.isValid && display.displayId == Display.DEFAULT_DISPLAY && defaultDisplay(context) != null
+    } catch (_: RuntimeException) { false }
+    fun screenReady(context: Context): Boolean = try {
+        context.getSystemService(PowerManager::class.java)?.isInteractive == true &&
+            context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == false
+    } catch (_: RuntimeException) { false }
+    fun block(context: Context, config: AppSettings, visible: Boolean = true): String? = try {
+        startBlock(visible, overlays(context), accessibility(context), config.mode,
+            defaultDisplay = defaultTarget(context) && screenReady(context),
+            braviaCalibrated = config.braviaVisibilityCalibrated,
+            localHost = config.mode != PreferenceContract.MODE_BRAVIA || localHostMatches(config.braviaHost, ownIpv4Addresses()))
+            ?: if (SettingsValidator.validate(config).isNotEmpty()) "設定に不正な値があります" else if (config.mode == PreferenceContract.MODE_BRAVIA &&
+                (!EncryptedPskStore(context).contains() || SettingsValidator.stationMap(config.braviaMapJson, true).isEmpty())) "PSKと局URI対応表を登録してください" else null
+    } catch (_: Exception) { "表示先・権限・ネットワークを確認できない端末では開始できません" }
+    fun startBlock(visible: Boolean, overlays: Boolean, accessibility: Boolean, mode: String,
+        defaultDisplay: Boolean = true, braviaCalibrated: Boolean = false, localHost: Boolean = false): String? = when {
         !visible -> "画面を開いた状態で開始してください"
+        !defaultDisplay -> "有効な標準画面（default display）と画面ON・ロック解除を確認できません"
         !overlays -> "「他のアプリの上に表示」の許可が必要です"
-        mode == PreferenceContract.MODE_ACCESSIBILITY && !accessibility -> "端末設定でNicoTVOverlayのユーザー補助を有効にしてください"
+        mode in setOf(PreferenceContract.MODE_ACCESSIBILITY, PreferenceContract.MODE_BRAVIA) && !accessibility -> "端末設定でNicoTVOverlayのユーザー補助を有効にしてください"
+        mode == PreferenceContract.MODE_BRAVIA && !braviaCalibrated -> "BRAVIAにはTV_PACKAGESとLIVE_RESOURCE_IDSの校正が必要です（局OSDは不要）"
+        mode == PreferenceContract.MODE_BRAVIA && !localHost -> "BRAVIAホストはこのテレビ自身の私有IPv4に一致する必要があります。未確認・別端末は非対応です"
         else -> null // POST_NOTIFICATIONS denial is not an OS FGS-start prohibition.
     }
 }
 
 object ServiceCommands {
     fun start(activity: Activity, visible: Boolean): Boolean {
+        if (PlatformPermissions.block(activity, SettingsRepository(activity).read(), visible) != null) return false
         val ticket = RuntimeSession.authorize(visible) ?: return false
         return try {
             ContextCompat.startForegroundService(activity, Intent(activity, OverlayService::class.java)
@@ -50,6 +92,7 @@ object ServiceCommands {
     }
     fun reload(context: Context) {
         if (!RuntimeSession.state.value.active) return
+        if (PlatformPermissions.block(context, SettingsRepository(context).read()) != null) { stop(context); return }
         try { context.startService(Intent(context, OverlayService::class.java).setAction(OverlayService.ACTION_RECONFIGURE)) }
         catch (_: IllegalStateException) { stop(context) }
         catch (_: SecurityException) { stop(context) }

@@ -23,6 +23,7 @@ class OverlayService : Service() {
     private lateinit var controller: SessionController
     private lateinit var window: OverlayWindow
     private var detector: Job? = null
+    private var braviaGate: BraviaVisibilityGate? = null
     private var watchdog: Job? = null
     private var detectorEpoch = 0L
     private var promoted = false
@@ -71,10 +72,8 @@ class OverlayService : Service() {
     }
     private fun begin() {
         stopping = false
-        if (!PlatformPermissions.overlays(this) || !getSystemService(PowerManager::class.java).isInteractive) {
-            stopAll("表示許可と画面の状態を確認してください"); return
-        }
         val config = repository.read()
+        PlatformPermissions.block(this, config)?.let { stopAll(it); return }
         if (SettingsValidator.validate(config).isNotEmpty()) { stopAll("設定に不正な値があります。設定を保存し直してください"); return }
         try {
             getSystemService(NotificationManager::class.java).createNotificationChannel(
@@ -91,11 +90,9 @@ class OverlayService : Service() {
             watchdog = scope.launch {
                 while (isActive) {
                     delay(1000)
-                    if (!repository.preferences.getBoolean(PreferenceContract.SESSION_ACTIVE, false) || !PlatformPermissions.overlays(this@OverlayService) ||
-                        !getSystemService(PowerManager::class.java).isInteractive) { stopAll("表示許可の変更・画面OFF・停止を検出"); break }
-                    if (repository.read().mode == PreferenceContract.MODE_ACCESSIBILITY && !PlatformPermissions.accessibility(this@OverlayService)) {
-                        stopAll("ユーザー補助の接続が切れたため停止"); break
-                    }
+                    if (!repository.preferences.getBoolean(PreferenceContract.SESSION_ACTIVE, false)) { stopAll(); break }
+                    val blocked = PlatformPermissions.block(this@OverlayService, repository.read())
+                    if (blocked != null) { stopAll(blocked); break }
                     controller.tick()
                 }
             }
@@ -103,11 +100,12 @@ class OverlayService : Service() {
     }
     private fun reconfigure() {
         val config = repository.read()
-        if (SettingsValidator.validate(config).isNotEmpty()) { stopAll("設定が不正なため停止"); return }
+        PlatformPermissions.block(this, config)?.let { stopAll(it); return }
         controller.configure(config)
         launchDetector(config)
     }
     private fun launchDetector(config: AppSettings) {
+        braviaGate?.close(); braviaGate = null
         val epoch = ++detectorEpoch
         detector?.cancel(); detector = null
         StationDetectionBus.publish(StationObservation(null, DetectionOrigin.ACCESSIBILITY, SystemClock.elapsedRealtime(), false, "設定変更"))
@@ -121,19 +119,20 @@ class OverlayService : Service() {
                 }
             }
             PreferenceContract.MODE_BRAVIA -> {
-                detector = scope.launch {
-                    try {
-                        if (!SettingsValidator.isPrivateIpv4(config.braviaHost)) { unavailableBravia(); return@launch }
+                braviaGate = BraviaVisibilityGate(scope, SystemClock::elapsedRealtime, StationDetectionBus.observation,
+                    platformReady = {
+                        epoch == detectorEpoch && repository.preferences.getBoolean(PreferenceContract.SESSION_ACTIVE, false) &&
+                            repository.read() == config && PlatformPermissions.block(this, config) == null
+                    },
+                    rest = { flow {
+                        // Decrypt and create the cold REST flow only while visibility + local-host guards are valid.
                         val psk = EncryptedPskStore(this@OverlayService).read()
-                        if (psk.isNullOrEmpty()) { unavailableBravia(); return@launch }
                         val map = SettingsValidator.stationMap(config.braviaMapJson, true)
-                        if (map.isEmpty()) { unavailableBravia(); return@launch }
-                        BraviaStationDetector(channelMap = map).observations(config.braviaHost, psk).collect {
-                            if (epoch == detectorEpoch && repository.preferences.getBoolean(PreferenceContract.SESSION_ACTIVE, false)) controller.observation(it)
-                        }
-                    } catch (cancel: CancellationException) { throw cancel }
-                    catch (_: Exception) { if (epoch == detectorEpoch) unavailableBravia() }
-                }
+                        if (psk.isNullOrEmpty() || map.isEmpty()) throw IllegalStateException("BRAVIA設定が未確認")
+                        emitAll(BraviaStationDetector(channelMap = map).observations(config.braviaHost, psk))
+                    } },
+                    deliver = { if (epoch == detectorEpoch) controller.observation(it) }
+                ).also { it.start() }
             }
         }
     }
@@ -159,10 +158,11 @@ class OverlayService : Service() {
         stopping = true
         RuntimeSession.invalidate()
         repository.setSessionActive(false)
+        controller.stop(message) // invalidate rendering before any upstream cancellation can suspend
+        braviaGate?.close(); braviaGate = null
         ++detectorEpoch
         detector?.cancel(); detector = null
         watchdog?.cancel(); watchdog = null
-        controller.stop(message)
         scope.coroutineContext.cancelChildren()
         StationDetectionBus.publish(StationObservation(null, DetectionOrigin.ACCESSIBILITY, SystemClock.elapsedRealtime(), false, "停止"))
         promoted = false

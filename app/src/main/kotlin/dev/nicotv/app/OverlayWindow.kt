@@ -11,32 +11,43 @@ import dev.nicotv.core.OverlayPreferences
 import dev.nicotv.overlay.DanmakuView
 
 class OverlayWindow(private val context: Context, private val failed: () -> Unit) : CommentSink {
-    private val manager = context.getSystemService(WindowManager::class.java)
+    private var manager: WindowManager? = null
+    private var drawingContext: Context? = null
     private var view: DanmakuView? = null
     private var options = OverlayPreferences()
     override fun preferences(value: OverlayPreferences) {
         options = value
         view?.let {
+            if (!PlatformPermissions.defaultTarget(context)) { clear(); failed(); return }
             // Alpha is applied exactly once at window level, not also to every glyph.
             it.updatePreferences(value.copy(opacity = 1f))
-            try { manager.updateViewLayout(it, parameters()) } catch (_: RuntimeException) { clear(); failed() }
+            try { manager?.updateViewLayout(it, parameters()) } catch (_: RuntimeException) { clear(); failed() }
         }
     }
     override fun clear() {
-        val old = view ?: return
-        view = null
+        val old = view
+        val previousManager = manager
+        view = null; manager = null; drawingContext = null
+        if (old == null) return
         old.clearComments()
-        try { manager.removeViewImmediate(old) } catch (_: IllegalArgumentException) { /* already removed */ }
+        try { previousManager?.removeViewImmediate(old) } catch (_: IllegalArgumentException) { /* already removed */ }
     }
     override fun comment(value: LiveComment) {
         if (!RuntimeSession.state.value.active ||
             !SettingsRepository(context).preferences.getBoolean(dev.nicotv.core.PreferenceContract.SESSION_ACTIVE, false) ||
-            !PlatformPermissions.overlays(context)) { clear(); failed(); return }
+            !PlatformPermissions.overlays(context) || !PlatformPermissions.defaultTarget(context) || !PlatformPermissions.screenReady(context)) { clear(); failed(); return }
         try {
-            val target = view ?: DanmakuView(context).also {
+            if (drawingContext == null) {
+                val display = PlatformPermissions.defaultDisplay(context) ?: throw IllegalStateException("標準画面が不明")
+                val displayContext = context.createDisplayContext(display)
+                drawingContext = if (Build.VERSION.SDK_INT >= 30) displayContext.createWindowContext(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null) else displayContext
+                manager = drawingContext!!.getSystemService(WindowManager::class.java)
+                check(manager?.defaultDisplay?.displayId == android.view.Display.DEFAULT_DISPLAY)
+            }
+            val target = view ?: DanmakuView(drawingContext!!).also {
                 it.importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
                 it.updatePreferences(options.copy(opacity = 1f))
-                manager.addView(it, parameters()); view = it
+                manager!!.addView(it, parameters()); view = it
             }
             target.addComment(value)
         } catch (_: RuntimeException) { clear(); failed() }
