@@ -27,6 +27,7 @@ class OverlayService : Service() {
     private var watchdog: Job? = null
     private var detectorEpoch = 0L
     private var promoted = false
+    private var lastNotificationState: Triple<String?, ConnectionState, Backend>? = null
     private var receiverRegistered = false
     private var stopping = false
     private val stopAction = Runnable { stopAll() }
@@ -148,7 +149,16 @@ class OverlayService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW).setSilent(true).setOngoing(true).setOnlyAlertOnce(true)
             .setContentIntent(open).addAction(R.drawable.ic_notification, "停止", stop).build()
     }
+    override fun dump(fd: java.io.FileDescriptor, writer: java.io.PrintWriter, args: Array<out String>) {
+        val s = controller.state
+        writer.println("NicoTVOverlay active=${s.active} mode=${s.mode} station=${s.stationId} connection=${s.connection} received=${s.receivedComments}")
+        writer.println(window.diagnostics())
+    }
     private fun notifyState(state: SessionUiState) {
+        // Per-comment counters update the app UI, but must not spam NotificationManager.
+        val key = Triple(state.stationId, state.connection, state.backend)
+        if (key == lastNotificationState) return
+        lastNotificationState = key
         // Posting is optional when notification permission is denied; startForeground still supplied one.
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         try { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(state)) } catch (_: SecurityException) { }

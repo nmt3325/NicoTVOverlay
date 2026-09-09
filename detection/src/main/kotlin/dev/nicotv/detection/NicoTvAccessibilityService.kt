@@ -10,6 +10,7 @@ import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.graphics.Rect
 import android.view.Display
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import dev.nicotv.core.DetectionOrigin
 import dev.nicotv.core.StationObservation
@@ -41,6 +42,7 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
     private var interrupted = false // Latches until an observed Stop; Start must then explicitly reauthorize.
     private var receiverRegistered = false
     private var lastScanAt = -DetectionLimits.MIN_SCAN_MS
+    private var settleUntil = 0L
     private var confirmation: Runnable? = null
     private var profile = DetectionProfile.parse(false, "", "", "", "", "{}")
 
@@ -60,7 +62,7 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         override fun run() {
             if (!connected || interrupted || !profile.collecting) return
             if (!canObserve()) suspendObservation("画面が消灯・ロック中、または検出が停止中です")
-            else if (profile.guardEnabled) requestScan() // A NEW window + marker check, not package-only evidence.
+            else if (profile.guardEnabled || profile.transientOsd) requestScan() // A NEW window + marker check, not package-only evidence.
             else {
                 // No child/text/description access; package-filtered events miss Home departure.
                 val identity = foregroundOnly()
@@ -110,6 +112,7 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         handler.removeCallbacksAndMessages(null)
         confirmation = null
         lastScanAt = -DetectionLimits.MIN_SCAN_MS
+        settleUntil = 0L
         // Only an actual inactive authorization resets the interruption latch, not an invalid profile.
         val stopped = try { !preferences.getBoolean(PreferenceContract.SESSION_ACTIVE, false) }
             catch (_: ClassCastException) { false }
@@ -134,7 +137,8 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         // null/empty framework filters can mean all packages. Explicit sentinel plus code gate instead.
         info.packageNames = if (enabled) profile.packages.toTypedArray() else arrayOf(DISABLED_PACKAGE)
         info.flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
-            if (enabled && profile.guardEnabled) AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS else 0
+            (if (enabled && profile.guardEnabled) AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS else 0) or
+            (if (enabled && profile.transientOsd) AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS else 0)
         info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
         info.notificationTimeout = DetectionLimits.MIN_SCAN_MS
         serviceInfo = info
@@ -155,9 +159,35 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         requestScan()
     }
 
+    override fun onKeyEvent(event: KeyEvent): Boolean {
+        // Observe only tuning keys while the explicitly selected AQUOS profile is active.
+        // Never consume, store or log keys; all ordinary remote input passes through unchanged.
+        val tuning = event.keyCode in setOf(KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN,
+            KeyEvent.KEYCODE_TV_INPUT, KeyEvent.KEYCODE_TV_TERRESTRIAL_DIGITAL,
+            KeyEvent.KEYCODE_TV_TERRESTRIAL_ANALOG, KeyEvent.KEYCODE_TV_SATELLITE,
+            KeyEvent.KEYCODE_TV_SATELLITE_BS, KeyEvent.KEYCODE_TV_SATELLITE_CS) ||
+            event.keyCode in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9
+        if (tuning && event.action == KeyEvent.ACTION_DOWN && profile.transientOsd && canObserve() &&
+            foregroundOnly()?.packageName == dev.nicotv.core.AquosProfile.PACKAGE) {
+            cancelConfirmation()
+            policy.invalidate("選局操作を検出・新しい局のOSDを待機中")
+            settleUntil = SystemClock.elapsedRealtime() + 400L
+            requestScan()
+        }
+        return false
+    }
+
+    override fun dump(fd: java.io.FileDescriptor, writer: java.io.PrintWriter, args: Array<out String>) {
+        val o = policy.observation
+        writer.println("NicoTVDetection connected=$connected active=${profile.collecting} aquos=${profile.transientOsd} interrupted=$interrupted")
+        writer.println("station=${o.stationId} watchingTv=${o.watchingTv} evidenceAgeMs=${SystemClock.elapsedRealtime() - o.observedAtMs} pending=${policy.pending?.stationId}")
+        writer.println("reason=${o.detail}")
+    }
+
     private fun requestScan() {
         handler.removeCallbacks(scan)
-        val wait = (DetectionLimits.MIN_SCAN_MS - (SystemClock.elapsedRealtime() - lastScanAt)).coerceAtLeast(0)
+        val now = SystemClock.elapsedRealtime()
+        val wait = maxOf(0L, DetectionLimits.MIN_SCAN_MS - (now - lastScanAt), settleUntil - now)
         if (wait == 0L) scan.run() else handler.postDelayed(scan, wait)
     }
 
@@ -284,6 +314,10 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
             val bounds = Rect()
             node.getBoundsInScreen(bounds)
             return !bounds.isEmpty
+        }
+        override val bounds: EvidenceBounds get() {
+            val r = Rect(); node.getBoundsInScreen(r)
+            return EvidenceBounds(r.left, r.top, r.right, r.bottom)
         }
         override val childCount get() = node.childCount
         override val collection get() = node.collectionInfo != null || node.collectionItemInfo != null ||

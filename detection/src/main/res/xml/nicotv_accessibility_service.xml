@@ -6,7 +6,7 @@
     android:accessibilityFlags="flagReportViewIds"
     android:notificationTimeout="250"
     android:canRetrieveWindowContent="true"
-    android:canRequestFilterKeyEvents="false"
+    android:canRequestFilterKeyEvents="true"
     android:canPerformGestures="false"
     android:canTakeScreenshot="false"
     android:isAccessibilityTool="false"

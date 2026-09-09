@@ -1,6 +1,7 @@
 package dev.nicotv.detection
 
 import dev.nicotv.core.PreferenceContract
+import dev.nicotv.core.AquosProfile
 import dev.nicotv.core.StationCatalog
 import java.text.Normalizer
 import kotlinx.serialization.json.Json
@@ -58,6 +59,9 @@ internal data class DetectionProfile(
     val guardEnabled: Boolean get() = sessionActive && mode == PreferenceContract.MODE_BRAVIA &&
         valid && packages.isNotEmpty() && liveIds.isNotEmpty()
     val collecting: Boolean get() = enabled || guardEnabled
+    // Continuity is opt-in and limited to the exact, physically verified AQUOS profile.
+    val transientOsd: Boolean get() = enabled && packages == setOf(AquosProfile.PACKAGE) &&
+        stationIds == setOf(AquosProfile.STATION) && liveIds == setOf(AquosProfile.LIVE)
 
     companion object {
         private val packagePattern = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+")

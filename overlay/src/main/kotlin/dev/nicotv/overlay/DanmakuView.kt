@@ -51,6 +51,11 @@ class DanmakuView @JvmOverloads constructor(
             -left,
         )
     })
+    private var nonEmptyFrames = 0L
+    /** Aggregate rendering evidence only; never exposes comment text, IDs or users. */
+    fun diagnostics(): String = synchronized(gate) {
+        "visible=${engine.visible.size} pending=${engine.pendingCount} nonEmptyFrames=$nonEmptyFrames accepting=$accepting"
+    }
     private var initialized = false
     private var accepting = false
     private var generation = 0L
@@ -166,6 +171,7 @@ class DanmakuView @JvmOverloads constructor(
             if (!accepting) return
             val now = monotonicClock()
             engine.advance(now)
+            if (engine.visible.isNotEmpty()) nonEmptyFrames++
             val save = canvas.save()
             canvas.clipRect(engine.safeLeft, engine.safeTop, engine.safeRight, engine.safeBottom)
             val alpha = (engine.preferences.opacity * 255f).roundToInt().coerceIn(0, 255)

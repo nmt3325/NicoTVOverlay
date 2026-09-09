@@ -8,7 +8,7 @@ data class SessionUiState(
     val active: Boolean = false, val stationId: String? = null,
     val mode: String = PreferenceContract.MODE_MANUAL, val backend: Backend = Backend.OFFICIAL,
     val connection: ConnectionState = ConnectionState.IDLE, val message: String = "停止中",
-    val generation: Long = 0
+    val generation: Long = 0, val receivedComments: Long = 0
 )
 interface CommentSink {
     fun preferences(value: OverlayPreferences)
@@ -88,7 +88,11 @@ class SessionController(
     internal fun accept(generation: Long, event: StreamEvent) {
         if (!isCurrent(generation)) return
         when (event) {
-            is StreamEvent.Comment -> if (event.comment.origin == settings.backend.origin && state.connection == ConnectionState.LIVE) sink.comment(event.comment)
+            is StreamEvent.Comment -> if (event.comment.origin == settings.backend.origin && state.connection == ConnectionState.LIVE) {
+                sink.comment(event.comment)
+                state = state.copy(receivedComments = state.receivedComments + 1)
+                publish(state)
+            }
             is StreamEvent.State -> {
                 if (event.origin != settings.backend.origin) return
                 if (event.state != ConnectionState.LIVE) sink.clear()
@@ -114,7 +118,7 @@ class SessionController(
     }
     private fun updateMessage(message: String) { state = state.copy(message = message); publish(state) }
     private fun resetStream() {
-        state = state.copy(generation = state.generation + 1)
+        state = state.copy(generation = state.generation + 1, receivedComments = 0)
         streamJob?.cancel(); streamJob = null
         sink.clear()
     }

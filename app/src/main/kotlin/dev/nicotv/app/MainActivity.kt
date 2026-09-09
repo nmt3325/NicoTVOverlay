@@ -113,7 +113,8 @@ class MainActivity : Activity() {
         } else config.modeLabel
         val station = StationCatalog.find(s.stationId)?.name ?: if (s.active) "局未検出" else "指定：${StationCatalog.find(config.stationId)?.name ?: "なし"}"
         val backend = if (s.active) s.backend else config.backend
-        status.text = "${if (s.active) "●" else "■"} ${s.message}  ·  $station  ·  $mode  ·  ${backend.label}"
+        val received = if (s.active && s.connection == ConnectionState.LIVE) "  ·  受信${s.receivedComments}件" else ""
+        status.text = "${if (s.active) "●" else "■"} ${s.message}  ·  $station  ·  $mode  ·  ${backend.label}$received"
         status.setTextColor(if (s.active && s.connection == ConnectionState.LIVE) Color.rgb(114, 188, 143) else white)
     }
     internal fun showPage(name: String) {
@@ -130,6 +131,15 @@ class MainActivity : Activity() {
     }
     private fun viewingPage() {
         val s = repository.read()
+        body.addView(button("AQUOSの自動追従を設定", primary = true) {
+            confirm("AQUOSの自動追従", "AQUOS放送アプリの現在局ラベルだけを読みます。選局キーは旧局の解除に使い、保存・送信・消費しません。局変更で実況も切り替え、番組表・ホームでは消去します。初回や画面復帰後に局未検出なら、リモコンの画面表示を押してください。ユーザー補助の許可が必要です。", {
+                if (persist(repository.read().copy(mode = PreferenceContract.MODE_ACCESSIBILITY,
+                    tvPackages = AquosProfile.PACKAGE, osdIds = AquosProfile.STATION,
+                    liveIds = AquosProfile.LIVE, aliasesJson = AquosProfile.aliasesJson))) {
+                    showPage("視聴"); showHint("AQUOS自動追従を設定しました。「開始」後、放送画面で選局または画面表示してください")
+                }
+            })
+        }, fullButton())
         section("局の指定方法")
         choices(listOf("手動" to PreferenceContract.MODE_MANUAL, "自動OSD" to PreferenceContract.MODE_ACCESSIBILITY, "BRAVIA・実験" to PreferenceContract.MODE_BRAVIA), s.mode) { mode ->
             val save = { persist(repository.read().copy(mode = mode)); showPage("視聴") }

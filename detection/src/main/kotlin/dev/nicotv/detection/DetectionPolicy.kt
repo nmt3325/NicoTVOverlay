@@ -31,7 +31,14 @@ internal class DetectionPolicy(private val now: () -> Long, private val publish:
         if (!authorized) return null
         val station = value.stationId
         val foreground = value.foreground
-        if (station == null || foreground == null) { invalidate(value.reason); return null }
+        if (station == null || foreground == null) {
+            val age = now() - observation.observedAtMs
+            if (value.retainStation && foreground != null && foreground == confirmedForeground &&
+                pending == null && observation.stationId != null && age in 0..DetectionLimits.GUARD_TTL_MS) {
+                set(observation.copy(observedAtMs = now(), watchingTv = true, detail = "AQUOS全画面ライブの継続を再確認"))
+            } else invalidate(value.reason)
+            return null
+        }
         val time = now()
         if (time < observation.observedAtMs) { invalidate("時刻の整合性を確認できません"); return null }
         if (observation.stationId == station && confirmedForeground == foreground) {

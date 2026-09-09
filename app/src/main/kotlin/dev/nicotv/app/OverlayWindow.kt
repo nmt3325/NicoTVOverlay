@@ -22,6 +22,9 @@ class OverlayWindow(private val context: Context, private val failed: () -> Unit
     private val handler = Handler(Looper.getMainLooper())
     private var generation = 0L
     private var ingress: OverlayIngress? = null
+    fun diagnostics(): String = view?.let {
+        "attached=${it.isAttachedToWindow} shown=${it.isShown} size=${it.width}x${it.height} ${it.diagnostics()}"
+    } ?: "attached=false visible=0"
     override fun preferences(value: OverlayPreferences) {
         if (options != value) clear() // settings invalidate pre-attach and delayed ingress as well
         options = value

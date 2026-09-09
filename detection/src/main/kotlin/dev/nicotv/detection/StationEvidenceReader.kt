@@ -7,9 +7,22 @@ internal interface EvidenceNode : AutoCloseable {
     val visible: Boolean
     val childCount: Int
     val collection: Boolean
+    val bounds: EvidenceBounds? get() = null
     fun text(): CharSequence?
     fun description(): CharSequence?
     fun child(index: Int): EvidenceNode?
+}
+
+internal data class EvidenceBounds(val left: Int, val top: Int, val right: Int, val bottom: Int) {
+    fun covers(screen: EvidenceBounds): Boolean {
+        val w = screen.right.toLong() - screen.left
+        val h = screen.bottom.toLong() - screen.top
+        return w > 0 && h > 0 && right > left && bottom > top &&
+            left <= screen.left + w / 20 && top <= screen.top + h / 20 &&
+            right >= screen.right - w / 20 && bottom >= screen.bottom - h / 20 &&
+            left >= screen.left - w / 20 && top >= screen.top - h / 20 &&
+            right <= screen.right + w / 20 && bottom <= screen.bottom + h / 20
+    }
 }
 
 internal data class ForegroundIdentity(val packageName: String, val windowId: Int)
@@ -17,6 +30,7 @@ internal data class StationEvidence(
     val stationId: String?,
     val foreground: ForegroundIdentity?,
     val reason: String,
+    val retainStation: Boolean = false,
 )
 
 internal object StationEvidenceReader {
@@ -27,6 +41,8 @@ internal object StationEvidenceReader {
         if (foreground.packageName !in profile.packages || root.packageName != foreground.packageName) {
             return unknown("テレビアプリが前面にありません")
         }
+        val screen = if (profile.transientOsd) root.bounds else null
+        val maxDepth = if (profile.transientOsd) 32 else DetectionLimits.MAX_DEPTH
         var nodes = 0
         var characters = 0
         var live = false
@@ -35,7 +51,7 @@ internal object StationEvidenceReader {
         val candidates = mutableSetOf<String>()
         fun visit(node: EvidenceNode, depth: Int) {
             if (invalid) return
-            if (++nodes > DetectionLimits.MAX_NODES || depth > DetectionLimits.MAX_DEPTH) {
+            if (++nodes > DetectionLimits.MAX_NODES || depth > maxDepth) {
                 invalid = true; return
             }
             // Never access foreign package text, descriptions or descendants.
@@ -44,7 +60,10 @@ internal object StationEvidenceReader {
             // A list/grid item is not tuned-channel evidence even when focused/selected.
             if (node.collection) { invalid = true; return }
             val id = node.resourceId
-            if (id in profile.liveIds) live = true // Marker TEXT is deliberately never read.
+            if (id in profile.liveIds) {
+                // AQUOS retains this ID in its EPG as a 252x140 thumbnail. ID alone is not live evidence.
+                if (!profile.transientOsd || (screen != null && node.bounds?.covers(screen) == true)) live = true
+            } // Marker TEXT is deliberately never read.
             if (id in profile.stationIds) {
                 var hasLabel = false
                 for (raw in listOf(node.text(), node.description())) {
@@ -64,7 +83,7 @@ internal object StationEvidenceReader {
             }
             val count = node.childCount
             if (count < 0 || count > DetectionLimits.MAX_NODES - nodes ||
-                (depth >= DetectionLimits.MAX_DEPTH && count > 0)) { invalid = true; return }
+                (depth >= maxDepth && count > 0)) { invalid = true; return }
             for (index in 0 until count) {
                 val child = node.child(index)
                 if (child == null) { invalid = true; return }
@@ -77,6 +96,8 @@ internal object StationEvidenceReader {
             when {
                 invalid -> unknown("局情報が曖昧・一覧表示・読み取り上限超過です")
                 !live -> unknown("校正済みのライブ表示を確認できません")
+                labels == 0 && profile.transientOsd -> StationEvidence(null, foreground,
+                    "AQUOSの全画面ライブを再確認・OSDは非表示", retainStation = true)
                 labels == 0 || candidates.size != 1 -> unknown("局を一意に確認できません")
                 else -> StationEvidence(candidates.single(), foreground, "校正済みライブ局ラベル")
             }
