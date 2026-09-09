@@ -37,6 +37,8 @@ internal data class StationEvidence(
     val reason: String,
     val retainStation: Boolean = false,
     val transient: Boolean = false,
+    /** A calibrated label was read but is not a known station: proof another station is on screen. */
+    val unknownStation: Boolean = false,
 )
 
 internal object StationEvidenceReader {
@@ -106,7 +108,8 @@ internal object StationEvidenceReader {
             val failure = rejected
             when {
                 failure == LIST_SCREEN -> unknown("一覧表示のため選局中の局を確認できません")
-                failure == UNKNOWN_LABEL -> unknown("未登録の局ラベルです")
+                failure == UNKNOWN_LABEL ->
+                    StationEvidence(null, foreground, "未登録の局ラベルです", unknownStation = true)
                 // Physically observed on AQUOS: the tree mutates while the OSD is being dismissed.
                 failure != null -> StationEvidence(null, foreground,
                     "画面を読み取れません ($failure nodes=$nodes)", transient = true)

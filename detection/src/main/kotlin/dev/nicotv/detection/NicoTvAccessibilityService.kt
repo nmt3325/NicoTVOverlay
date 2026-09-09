@@ -171,6 +171,7 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         if (tuning && event.action == KeyEvent.ACTION_DOWN && profile.transientOsd && canObserve() &&
             foregroundOnly()?.packageName == dev.nicotv.core.AquosProfile.PACKAGE) {
             cancelConfirmation()
+            policy.forget() // a tuning action may land on another station without any OSD read
             policy.invalidate("選局操作を検出・新しい局のOSDを待機中")
             settleUntil = SystemClock.elapsedRealtime() + 400L
             requestScan()

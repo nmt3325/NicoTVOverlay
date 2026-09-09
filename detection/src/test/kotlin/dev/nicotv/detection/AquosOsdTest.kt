@@ -125,4 +125,35 @@ class AquosOsdTest {
         assertFalse(read("未対応局").transient)
         assertFalse(read().transient)
     }
+
+    @Test fun aGuideDismissedWithoutAnyOsdResumesTheStationOnlyAfterTheGracePeriod() {
+        var now = 0L; val policy = DetectionPolicy({ now }, {})
+        policy.authorize(true)
+        val p = requireNotNull(policy.evidence(read("日テレ１")))
+        now = p.dueAt; policy.confirm(p.generation, read("日テレ１"))
+        now += 1000; policy.evidence(read(marker = EvidenceBounds(0, 0, 252, 140)))
+        assertNull(policy.observation.stationId)
+        now += 500; policy.evidence(read()); assertNull(policy.observation.stationId)
+        now += DetectionLimits.RESUME_GRACE_MS - 1; policy.evidence(read())
+        assertNull(policy.observation.stationId)
+        now += 1; policy.evidence(read())
+        assertEquals("jk4", policy.observation.stationId)
+        val q = requireNotNull(policy.evidence(read("ＮＨＫ総合１・東京")))
+        now = q.dueAt; policy.confirm(q.generation, read("ＮＨＫ総合１・東京"))
+        assertEquals("jk1", policy.observation.stationId)
+    }
+    @Test fun aTuneMadeFromTheGuideConfirmsTheNewStationAndNeverResumesTheOldOne() {
+        var now = 0L; val policy = DetectionPolicy({ now }, {})
+        policy.authorize(true)
+        val p = requireNotNull(policy.evidence(read("日テレ１")))
+        now = p.dueAt; policy.confirm(p.generation, read("日テレ１"))
+        now += 1000; policy.evidence(read(marker = EvidenceBounds(0, 0, 252, 140)))
+        now += 500; val q = requireNotNull(policy.evidence(read("ＮＨＫ総合１・東京")))
+        now = q.dueAt; policy.confirm(q.generation, read("ＮＨＫ総合１・東京"))
+        assertEquals("jk1", policy.observation.stationId)
+        repeat(6) {
+            now += 1000; policy.evidence(read())
+            assertEquals("jk1", policy.observation.stationId)
+        }
+    }
 }

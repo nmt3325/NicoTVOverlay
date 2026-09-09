@@ -18,6 +18,8 @@ internal object DetectionLimits {
     const val GUARD_TTL_MS = 2500L
     const val DEBOUNCE_MS = 750L
     const val EVIDENCE_TTL_MS = 30_000L
+    const val RESTORE_TTL_MS = 90_000L
+    const val RESUME_GRACE_MS = 2_500L
 }
 
 /** NFKC followed by whitespace folding, NOT substring/case/number guessing. */

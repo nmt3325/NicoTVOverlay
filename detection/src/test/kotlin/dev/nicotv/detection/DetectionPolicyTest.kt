@@ -130,4 +130,57 @@ class DetectionPolicyTest {
             "画面を読み取れません (missing nodes=3)", transient = true))
         assertNull(policy.observation.stationId)
     }
+
+    @Test fun `a guide screen clears the station and a quiet live streak resumes it provisionally`() {
+        confirmed()
+        now = 1000; policy.evidence(StationEvidence(null, tv, "list screen"))
+        assertNull(policy.observation.stationId)
+        now = 2000; policy.evidence(StationEvidence(null, tv, "osd hidden", retainStation = true))
+        assertNull(policy.observation.stationId)
+        now = 4499; policy.evidence(StationEvidence(null, tv, "osd hidden", retainStation = true))
+        assertNull(policy.observation.stationId)
+        now = 4500; policy.evidence(StationEvidence(null, tv, "osd hidden", retainStation = true))
+        assertEquals("jk1", policy.observation.stationId)
+        assertEquals(4500L, policy.observation.observedAtMs)
+        assertEquals("OSDが出ないため直前の局を暫定復元", policy.observation.detail)
+        assertTrue(policy.observation.watchingTv)
+    }
+    @Test fun `a tuning action forgets the station so no stale station is resumed`() {
+        confirmed()
+        policy.forget(); policy.invalidate("tuning key")
+        for (time in listOf(2000L, 5000L, 9000L)) {
+            now = time; policy.evidence(StationEvidence(null, tv, "osd hidden", retainStation = true))
+            assertNull(policy.observation.stationId)
+        }
+    }
+    @Test fun `an unknown label proves another station and forgets the restore`() {
+        confirmed()
+        now = 1000; policy.evidence(StationEvidence(null, tv, "unknown label", unknownStation = true))
+        for (time in listOf(2000L, 5000L, 9000L)) {
+            now = time; policy.evidence(StationEvidence(null, tv, "osd hidden", retainStation = true))
+            assertNull(policy.observation.stationId)
+        }
+    }
+    @Test fun `a resume never crosses to another app and expires`() {
+        confirmed()
+        now = 1000; policy.evidence(StationEvidence(null, tv, "list screen"))
+        val other = ForegroundIdentity("other.tv", 9)
+        now = 1500; policy.evidence(StationEvidence(null, other, "osd hidden", retainStation = true))
+        now = 4500; policy.evidence(StationEvidence(null, other, "osd hidden", retainStation = true))
+        assertNull(policy.observation.stationId)
+        now = 750 + DetectionLimits.RESTORE_TTL_MS + 1
+        policy.evidence(StationEvidence(null, tv, "osd hidden", retainStation = true))
+        assertNull(policy.observation.stationId)
+    }
+    @Test fun `a fresh OSD label overrides a provisionally resumed station`() {
+        confirmed()
+        now = 1000; policy.evidence(StationEvidence(null, tv, "list screen"))
+        now = 2000; policy.evidence(StationEvidence(null, tv, "osd hidden", retainStation = true))
+        now = 4500; policy.evidence(StationEvidence(null, tv, "osd hidden", retainStation = true))
+        assertEquals("jk1", policy.observation.stationId)
+        now = 4600; val p = requireNotNull(policy.evidence(evidence("jk4")))
+        assertNull(policy.observation.stationId)
+        now = 5400; policy.confirm(p.generation, evidence("jk4"))
+        assertEquals("jk4", policy.observation.stationId)
+    }
 }
