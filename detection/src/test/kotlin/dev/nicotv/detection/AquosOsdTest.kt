@@ -13,7 +13,8 @@ class AquosOsdTest {
     private class Node(override val resourceId: String? = null, private val label: String? = null,
         override val bounds: EvidenceBounds? = EvidenceBounds(0, 0, 1920, 1080),
         val children: List<Node> = emptyList(), override val packageName: String? = AquosProfile.PACKAGE,
-        override val visible: Boolean = true, override val collection: Boolean = false) : EvidenceNode {
+        override val visible: Boolean = true, override val collection: Boolean = false,
+        private val dropChild: Boolean = false) : EvidenceNode {
         override val childCount get() = children.size
         override fun text(): CharSequence? {
             check(resourceId == AquosProfile.STATION) { "Uncalibrated text must not be read" }
@@ -23,7 +24,7 @@ class AquosOsdTest {
             check(resourceId == AquosProfile.STATION)
             return null
         }
-        override fun child(index: Int) = children[index]
+        override fun child(index: Int) = if (dropChild) null else children[index]
         override fun close() {}
     }
     private fun read(label: String? = null, marker: EvidenceBounds? = full,
@@ -112,5 +113,16 @@ class AquosOsdTest {
         repeat(20) { node = Node(children = listOf(node)) }
         val tooDeep = StationEvidenceReader.read(node, tv, profile())
         assertNull(tooDeep.stationId); assertFalse(tooDeep.retainStation)
+    }
+
+    @Test fun aTreeThatMutatesMidReadIsTransientWhileAListScreenIsNot() {
+        val mutating = StationEvidenceReader.read(
+            Node(children = listOf(Node(AquosProfile.LIVE)), dropChild = true), tv, profile())
+        assertTrue(mutating.transient); assertNull(mutating.stationId); assertFalse(mutating.retainStation)
+        val list = StationEvidenceReader.read(
+            Node(children = listOf(Node(AquosProfile.LIVE), Node(collection = true))), tv, profile())
+        assertFalse(list.transient); assertNull(list.stationId); assertFalse(list.retainStation)
+        assertFalse(read("未対応局").transient)
+        assertFalse(read().transient)
     }
 }

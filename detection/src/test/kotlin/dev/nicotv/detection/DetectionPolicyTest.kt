@@ -101,4 +101,33 @@ class DetectionPolicyTest {
         policy.confirm(p.generation, evidence())
         assertNull(policy.observation.stationId)
     }
+
+    @Test fun `a tree that mutates mid read holds the station without extending its evidence`() {
+        confirmed()
+        val glitch = StationEvidence(null, tv, "画面を読み取れません (missing nodes=12)", transient = true)
+        now = 1000; policy.evidence(glitch)
+        assertEquals("jk1", policy.observation.stationId)
+        assertEquals(750L, policy.observation.observedAtMs)
+        now = 1500; policy.evidence(StationEvidence(null, tv, "osd hidden", retainStation = true))
+        assertEquals("jk1", policy.observation.stationId)
+        assertEquals(1500L, policy.observation.observedAtMs)
+    }
+    @Test fun `an unreadable screen still clears once the guard window elapses`() {
+        confirmed()
+        val glitch = StationEvidence(null, tv, "画面を読み取れません (nodes nodes=257)", transient = true)
+        now = 3250; policy.evidence(glitch)
+        assertEquals("jk1", policy.observation.stationId)
+        assertEquals(750L, policy.observation.observedAtMs)
+        now = 3251; policy.evidence(glitch)
+        assertNull(policy.observation.stationId)
+    }
+    @Test fun `a list screen or another window is never held as transient`() {
+        confirmed()
+        now = 1000; policy.evidence(StationEvidence(null, tv, "一覧表示のため選局中の局を確認できません"))
+        assertNull(policy.observation.stationId)
+        now = 1100
+        policy.evidence(StationEvidence(null, ForegroundIdentity("test.tv", 2),
+            "画面を読み取れません (missing nodes=3)", transient = true))
+        assertNull(policy.observation.stationId)
+    }
 }

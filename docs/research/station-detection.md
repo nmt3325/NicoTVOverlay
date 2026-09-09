@@ -87,3 +87,30 @@ During this explicitly selected profile, tuning keys invalidate old station evid
 ### Hardware iteration: non-semantic AQUOS views (0.1.2)
 
 The first installed build could not see the live marker. On the real television, a full accessibility dump contained 65 nodes including the 1920x1080 live view and the current station label; a compressed dump exposed only one root. The service therefore requests `FLAG_INCLUDE_NOT_IMPORTANT_VIEWS` while the exact AQUOS profile is explicitly active. Package, resource-ID, text-budget, geometry and Stop gates remain in place; generic profiles do not request the extra tree flag. A service-level regression simulates this one-node compressed tree, then verifies label confirmation, 40-second hidden-OSD continuity, tuning-key pass-through/invalidation and removal of both flags on Stop. Missing-live diagnostics expose only root/marker bounds and node count, never arbitrary screen text.
+
+## 0.1.3: OSDが消える瞬間に確定局が失われる問題（実機で特定）
+
+AQUOS 実機（Android 14 / 1920x1080）で 0.1.2 を動かし、`dumpsys` を約180ms間隔で
+サンプリングして OSD が消える瞬間を観測した。
+
+```text
+ 1.35s station=jk7  reason=校正済み局ラベルで確認           # OSD 表示中は正しく確定
+ 4.36s station=null reason=局情報が曖昧・一覧表示・読み取り上限超過です  # OSD 消灯の1回だけ
+ 4.56s station=null reason=AQUOSの全画面ライブを再確認・OSDは非表示  # 以降復帰しない
+```
+
+`dumpsys accessibility` を OSD 表示時と非表示時で比較すると、前面ウィンドウは
+`TYPE_APPLICATION / 1920x1080` の同一 ID のままで変わらない。つまり OSD が閉じる途中で
+アクセシビリティツリーが書き換わり、走査が1回だけ失敗していた。
+
+0.1.2 ではこの1回の失敗が `invalidate()` を呼び、確定局と `confirmedForeground` を消していた。
+継続保持は「確定局が残っていること」を前提にしているため、以降は全画面ライブを
+再確認できても二度と復帰できない（片方向のラッチ）。
+
+0.1.3 の対応：
+
+- 読み取り失敗の理由を分離した。ツリーの書き換えや走査上限（missing / nodes / depth /
+  children / text / package）は一過性、一覧表示（EPG など）と未登録ラベルは
+  「別の画面が確実に見えている」ため即クリアのまま。
+- 一過性の失敗では、同じ確定ウィンドウ・確定局・2.5秒以内に限り局を保持する。
+  証拠時刻は更新しないので、読み取れない状態が続けば 2.5 秒で必ず失効する（fail-closed を維持）。

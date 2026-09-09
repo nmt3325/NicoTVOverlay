@@ -33,10 +33,17 @@ internal class DetectionPolicy(private val now: () -> Long, private val publish:
         val foreground = value.foreground
         if (station == null || foreground == null) {
             val age = now() - observation.observedAtMs
-            if (value.retainStation && foreground != null && foreground == confirmedForeground &&
-                pending == null && observation.stationId != null && age in 0..DetectionLimits.GUARD_TTL_MS) {
-                set(observation.copy(observedAtMs = now(), watchingTv = true, detail = "AQUOS全画面ライブの継続を再確認"))
-            } else invalidate(value.reason)
+            val heldScreen = foreground != null && foreground == confirmedForeground &&
+                pending == null && observation.stationId != null && age in 0..DetectionLimits.GUARD_TTL_MS
+            when {
+                value.retainStation && heldScreen ->
+                    set(observation.copy(observedAtMs = now(), watchingTv = true, detail = "AQUOS全画面ライブの継続を再確認"))
+                // A tree that mutates mid-read must not destroy a confirmed station. The evidence time is
+                // deliberately NOT refreshed, so an unreadable screen still expires inside the guard window.
+                value.transient && heldScreen ->
+                    set(observation.copy(watchingTv = true, detail = "画面を一時的に読み取れません・局を保持中"))
+                else -> invalidate(value.reason)
+            }
             return null
         }
         val time = now()
