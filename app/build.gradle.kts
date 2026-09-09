@@ -2,7 +2,7 @@ plugins { id("com.android.application"); kotlin("android") }
 android {
  namespace = "dev.nicotv.app"
  compileSdk = 35
- defaultConfig { minSdk = 26; targetSdk = 35; applicationId = "io.github.nmt3325.nicotvoverlay"; versionCode = 2; versionName = "0.1.1"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+ defaultConfig { minSdk = 26; targetSdk = 35; applicationId = "io.github.nmt3325.nicotvoverlay"; versionCode = 3; versionName = "0.1.2"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
  compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
  kotlinOptions { jvmTarget = "17" }
  testOptions { unitTests.isIncludeAndroidResources = true }

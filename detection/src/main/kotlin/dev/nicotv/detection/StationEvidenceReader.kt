@@ -46,6 +46,7 @@ internal object StationEvidenceReader {
         var nodes = 0
         var characters = 0
         var live = false
+        var markerBounds: EvidenceBounds? = null
         var invalid = false
         var labels = 0
         val candidates = mutableSetOf<String>()
@@ -61,6 +62,7 @@ internal object StationEvidenceReader {
             if (node.collection) { invalid = true; return }
             val id = node.resourceId
             if (id in profile.liveIds) {
+                markerBounds = node.bounds
                 // AQUOS retains this ID in its EPG as a 252x140 thumbnail. ID alone is not live evidence.
                 if (!profile.transientOsd || (screen != null && node.bounds?.covers(screen) == true)) live = true
             } // Marker TEXT is deliberately never read.
@@ -95,7 +97,8 @@ internal object StationEvidenceReader {
             visit(root, 0)
             when {
                 invalid -> unknown("局情報が曖昧・一覧表示・読み取り上限超過です")
-                !live -> unknown("校正済みのライブ表示を確認できません")
+                !live -> unknown("校正済みのライブ表示を確認できません" +
+                    if (profile.transientOsd) " (root=$screen marker=$markerBounds nodes=$nodes)" else "")
                 labels == 0 && profile.transientOsd -> StationEvidence(null, foreground,
                     "AQUOSの全画面ライブを再確認・OSDは非表示", retainStation = true)
                 labels == 0 || candidates.size != 1 -> unknown("局を一意に確認できません")

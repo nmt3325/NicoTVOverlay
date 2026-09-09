@@ -138,7 +138,8 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         info.packageNames = if (enabled) profile.packages.toTypedArray() else arrayOf(DISABLED_PACKAGE)
         info.flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
             (if (enabled && profile.guardEnabled) AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS else 0) or
-            (if (enabled && profile.transientOsd) AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS else 0)
+            (if (enabled && profile.transientOsd) AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS or
+                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS else 0) // AQUOS otherwise exposes only its root.
         info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
         info.notificationTimeout = DetectionLimits.MIN_SCAN_MS
         serviceInfo = info

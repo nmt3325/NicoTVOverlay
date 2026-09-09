@@ -10,6 +10,7 @@ import android.os.PowerManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import dev.nicotv.core.PreferenceContract
+import dev.nicotv.core.AquosProfile
 import java.time.Duration
 import org.junit.After
 import org.junit.Assert.*
@@ -101,6 +102,48 @@ class NicoTvAccessibilityServiceTest {
     }
     private fun selected() = StationDetectionBus.observation.value.stationId
     private fun confirm() { configure(); advance(750); assertEquals("jk1", selected()) }
+
+    @Test fun `AQUOS includes non semantic TV views only while explicitly active`() {
+        val include = android.accessibilityservice.AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+        val keys = android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
+        configure()
+        assertEquals(0, service.serviceInfo.flags and include)
+        assertEquals(0, service.serviceInfo.flags and keys)
+        pkg = AquosProfile.PACKAGE
+        var showOsd = true
+        FreshRootAccessibilityShadow.rootFactory = {
+            node().apply {
+                setBoundsInScreen(android.graphics.Rect(0, 0, 1920, 1080))
+                // Matches the real AQUOS: compressed tree has one root and no live/station nodes.
+                if (service.serviceInfo.flags and include != 0) {
+                    shadowOf(this).addChild(node(AquosProfile.LIVE).apply {
+                        setBoundsInScreen(android.graphics.Rect(0, 0, 1920, 1080))
+                    })
+                    if (showOsd) shadowOf(this).addChild(node(AquosProfile.STATION, "日テレ１"))
+                }
+            }
+        }
+        prefs.edit().putString(PreferenceContract.TV_PACKAGES, AquosProfile.PACKAGE)
+            .putString(PreferenceContract.OSD_RESOURCE_IDS, AquosProfile.STATION)
+            .putString(PreferenceContract.LIVE_RESOURCE_IDS, AquosProfile.LIVE)
+            .putString(PreferenceContract.CUSTOM_ALIASES, AquosProfile.aliasesJson).commit()
+        service.onServiceConnected()
+        assertEquals(include, service.serviceInfo.flags and include)
+        assertEquals(keys, service.serviceInfo.flags and keys)
+        advance(750); assertEquals("jk4", selected())
+        showOsd = false
+        advance(40_000); assertEquals("jk4", selected())
+        val keyCallback = service.javaClass.getDeclaredMethod("onKeyEvent", android.view.KeyEvent::class.java)
+            .apply { isAccessible = true }
+        assertFalse(keyCallback.invoke(service, android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN,
+            android.view.KeyEvent.KEYCODE_CHANNEL_UP)) as Boolean)
+        assertNull(selected())
+        advance(1500); assertNull(selected())
+        prefs.edit().putBoolean(PreferenceContract.SESSION_ACTIVE, false).commit()
+        service.onSharedPreferenceChanged(prefs, PreferenceContract.SESSION_ACTIVE)
+        assertEquals(0, service.serviceInfo.flags and include)
+        assertEquals(0, service.serviceInfo.flags and keys)
+    }
 
     @Test fun `connection without Start never reads a root or starts another service`() {
         configure(active = false)
