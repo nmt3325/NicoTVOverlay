@@ -69,7 +69,8 @@ class SettingsAndSecurityTest {
         assertNotNull(PlatformPermissions.startBlock(false, true, true, PreferenceContract.MODE_MANUAL))
         assertNotNull(PlatformPermissions.startBlock(true, false, true, PreferenceContract.MODE_MANUAL))
         assertNull(PlatformPermissions.startBlock(true, true, false, PreferenceContract.MODE_MANUAL))
-        assertNotNull(PlatformPermissions.startBlock(true, true, false, PreferenceContract.MODE_ACCESSIBILITY))
+        assertEquals(PlatformPermissions.ACCESSIBILITY_BLOCK,
+            PlatformPermissions.startBlock(true, true, false, PreferenceContract.MODE_ACCESSIBILITY))
     }
     @Test fun alphaIsCappedAndInvalidValuesAreTransparent() {
         assertEquals(0.8f, OverlayWindow.safeAlpha(1f, 0.8f), 0f)

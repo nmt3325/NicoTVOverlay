@@ -44,6 +44,7 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
     private var receiverRegistered = false
     private var lastScanAt = -DetectionLimits.MIN_SCAN_MS
     private var settleUntil = 0L
+    private var consentApprovals = 0
     private var confirmation: Runnable? = null
     private var profile = DetectionProfile.parse(false, "", "", "", "", "{}")
     // 画面表示に依存しない補助経路。READ_LOGS が付与されている場合だけ動く。
@@ -66,6 +67,8 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
     private val heartbeat = object : Runnable {
         override fun run() {
             if (!connected || interrupted || !profile.collecting) return
+            // ログアクセスの確認は自分で承認する（録画再生の自動同期を人の操作待ちにしない）。
+            if (profile.recordedEnabled && logReader.waitingForConsent) approveLogAccess()
             if (!canObserve()) suspendObservation("画面が消灯・ロック中、または検出が停止中です")
             else if (profile.guardEnabled || profile.transientOsd || profile.recordedEnabled) requestScan() // A NEW window + marker check, not package-only evidence.
             else {
@@ -106,6 +109,7 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
     public override fun onServiceConnected() {
         super.onServiceConnected()
         connected = true
+        AccessibilityLink.markConnected()
         reconfigure()
     }
 
@@ -164,6 +168,42 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         checkSelfPermission(android.Manifest.permission.READ_LOGS) == PackageManager.PERMISSION_GRANTED
     } catch (_: RuntimeException) { false }
 
+    /**
+     * 自分のログ要求に出た確認ダイアログだけを承認する。
+     * 前面が SystemUI のログアクセス確認でない時は何もしない。
+     */
+    private fun approveLogAccess() {
+        val root = activeRoot() ?: return
+        try {
+            if (!LogAccessConsent.dialogPackage(root.packageName?.toString())) return
+            if (clickAllow(root, 0)) consentApprovals += 1
+        } catch (_: RuntimeException) {
+            // 押せない端末では画面の指示に従って手動で許可してもらう
+        } finally { release(root) }
+    }
+
+    /** 深さを限って「1回限りのアクセスを許可」だけを押す。押せた時だけ true。 */
+    private fun clickAllow(node: AccessibilityNodeInfo, depth: Int): Boolean {
+        if (LogAccessConsent.isAllow(node.viewIdResourceName, node.text?.toString())) {
+            var target: AccessibilityNodeInfo? = node
+            var hops = 0
+            while (target != null && hops <= CLICK_PARENT_HOPS) {
+                if (target.isClickable && target.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+                target = try { target.parent } catch (_: RuntimeException) { null }
+                hops += 1
+            }
+            return false
+        }
+        if (depth >= DetectionLimits.MAX_DEPTH) return false
+        val children = minOf(node.childCount, DetectionLimits.MAX_NODES)
+        for (index in 0 until children) {
+            val child = try { node.getChild(index) } catch (_: RuntimeException) { null } ?: continue
+            val clicked = try { clickAllow(child, depth + 1) } finally { release(child) }
+            if (clicked) return true
+        }
+        return false
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!connected || interrupted || !profile.collecting || event == null) return
         if (!canObserve()) { suspendObservation("自動検出は停止中、または画面が無効です"); return }
@@ -200,6 +240,7 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         writer.println("station=${o.stationId} watchingTv=${o.watchingTv} evidenceAgeMs=${SystemClock.elapsedRealtime() - o.observedAtMs} pending=${policy.pending?.stationId}")
         writer.println("reason=${o.detail}")
         writer.println("logEvidence=${logReader.state}")
+        writer.println("logConsent=approvals=$consentApprovals waiting=${logReader.waitingForConsent}")
     }
 
     private fun requestScan() {
@@ -329,12 +370,14 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
 
     override fun onUnbind(intent: Intent?): Boolean {
         connected = false
+        AccessibilityLink.markDisconnected(SystemClock.elapsedRealtime())
         onInterrupt()
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
         connected = false
+        AccessibilityLink.markDisconnected(SystemClock.elapsedRealtime())
         onInterrupt()
         if (::preferences.isInitialized) preferences.unregisterOnSharedPreferenceChangeListener(this)
         if (receiverRegistered) { unregisterReceiver(screenReceiver); receiverRegistered = false }
@@ -366,6 +409,7 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
 
     companion object {
         private const val DISABLED_PACKAGE = "dev.nicotv.detection.disabled"
+        private const val CLICK_PARENT_HOPS = 3
         private val supportedEvents = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_WINDOWS_CHANGED
         private val configurationKeys = setOf(PreferenceContract.SESSION_ACTIVE, PreferenceContract.DETECTION_MODE,

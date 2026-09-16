@@ -6,6 +6,7 @@ import android.app.KeyguardManager
 import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.PowerManager
+import android.os.SystemClock
 import android.view.Display
 import android.view.WindowManager
 import java.net.NetworkInterface
@@ -17,10 +18,20 @@ import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 import androidx.core.content.ContextCompat
 import dev.nicotv.core.PreferenceContract
+import dev.nicotv.detection.AccessibilityLink
 
 object PlatformPermissions {
+    /** ユーザー補助が無効な時の停止理由。一覧の瞬断と区別できるよう定数で持つ。 */
+    const val ACCESSIBILITY_BLOCK = "端末設定でNicoTVOverlayのユーザー補助を有効にしてください"
     fun overlays(context: Context): Boolean = Settings.canDrawOverlays(context)
-    fun accessibility(context: Context): Boolean = context.getSystemService(AccessibilityManager::class.java)
+    /**
+     * 有効一覧に自分が出ているか、または自分のサービスが実際に接続中か。
+     * 一覧は setServiceInfo の直後などに自分を一時的に外すため、一覧だけで判定すると
+     * 録画再生中のセッションが瞬断で止まる。接続の目印は OS がバインドした自分のサービスだけが更新する。
+     */
+    fun accessibility(context: Context): Boolean =
+        accessibilityListed(context) || AccessibilityLink.live(SystemClock.elapsedRealtime())
+    fun accessibilityListed(context: Context): Boolean = context.getSystemService(AccessibilityManager::class.java)
         ?.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)?.any {
             it.resolveInfo.serviceInfo.packageName == context.packageName &&
                 it.resolveInfo.serviceInfo.name == "dev.nicotv.detection.NicoTvAccessibilityService"
@@ -62,7 +73,7 @@ object PlatformPermissions {
         !visible -> "画面を開いた状態で開始してください"
         !defaultDisplay -> "有効な標準画面（default display）と画面ON・ロック解除を確認できません"
         !overlays -> "「他のアプリの上に表示」の許可が必要です"
-        mode in setOf(PreferenceContract.MODE_ACCESSIBILITY, PreferenceContract.MODE_BRAVIA) && !accessibility -> "端末設定でNicoTVOverlayのユーザー補助を有効にしてください"
+        mode in setOf(PreferenceContract.MODE_ACCESSIBILITY, PreferenceContract.MODE_BRAVIA) && !accessibility -> ACCESSIBILITY_BLOCK
         mode == PreferenceContract.MODE_BRAVIA && !braviaCalibrated -> "BRAVIAにはTV_PACKAGESとLIVE_RESOURCE_IDSの校正が必要です（局OSDは不要）"
         mode == PreferenceContract.MODE_BRAVIA && !localHost -> "BRAVIAホストはこのテレビ自身の私有IPv4に一致する必要があります。未確認・別端末は非対応です"
         else -> null // POST_NOTIFICATIONS denial is not an OS FGS-start prohibition.

@@ -50,7 +50,7 @@ class SessionController(
         recordedSyncedAt = 0L
         if (value.backend == Backend.KAKOLOG && value.recordedAuto) {
             // 放送日時と放送局は録画再生画面の観測で決まるため、ここでは局を選ばない。
-            updateMessage(if (value.recordedCalibrated) "録画の再生情報を待機中（録画を再生し、画面表示を出してください）"
+            updateMessage(if (value.recordedCalibrated) "録画の再生情報を待機中（録画を再生すると自動で放送日時を取得します）"
                 else "録画画面の校正が必要です。RECORDED_RESOURCE_IDSを登録してください")
             return
         }

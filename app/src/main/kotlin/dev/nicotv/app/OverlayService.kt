@@ -32,6 +32,7 @@ class OverlayService : Service() {
     private var lastNotificationState: Triple<String?, ConnectionState, Backend>? = null
     private var receiverRegistered = false
     private var stopping = false
+    private var blockedStreak = 0
     private val stopAction = Runnable { stopAll() }
     private val screenOff = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -83,6 +84,7 @@ class OverlayService : Service() {
     }
     private fun begin() {
         stopping = false
+        blockedStreak = 0
         val config = repository.read()
         PlatformPermissions.block(this, config)?.let { stopAll(it); return }
         if (SettingsValidator.validate(config).isNotEmpty()) { stopAll("設定に不正な値があります。設定を保存し直してください"); return }
@@ -103,7 +105,10 @@ class OverlayService : Service() {
                     delay(1000)
                     if (!repository.preferences.getBoolean(PreferenceContract.SESSION_ACTIVE, false)) { stopAll(); break }
                     val blocked = PlatformPermissions.block(this@OverlayService, repository.read())
-                    if (blocked != null) { stopAll(blocked); break }
+                    // ユーザー補助一覧の瞬断だけは即停止しない。他の理由はこれまで通り即停止。
+                    if (blocked == null) blockedStreak = 0
+                    else if (blocked != PlatformPermissions.ACCESSIBILITY_BLOCK) { stopAll(blocked); break }
+                    else if (++blockedStreak >= BLOCK_TOLERANCE) { stopAll(blocked); break }
                     controller.tick()
                 }
             }
@@ -215,5 +220,6 @@ class OverlayService : Service() {
         const val EXTRA_TICKET = "start_ticket"
         private const val CHANNEL = "live_overlay"
         private const val NOTIFICATION_ID = 41
+        private const val BLOCK_TOLERANCE = 3
     }
 }
