@@ -45,6 +45,8 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
     private var lastScanAt = -DetectionLimits.MIN_SCAN_MS
     private var settleUntil = 0L
     private var consentApprovals = 0
+    private var consentRetries = 0
+    private var lastReacquireAt = 0L
     private var confirmation: Runnable? = null
     private var profile = DetectionProfile.parse(false, "", "", "", "", "{}")
     // 画面表示に依存しない補助経路。READ_LOGS が付与されている場合だけ動く。
@@ -68,7 +70,7 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         override fun run() {
             if (!connected || interrupted || !profile.collecting) return
             // ログアクセスの確認は自分で承認する（録画再生の自動同期を人の操作待ちにしない）。
-            if (profile.recordedEnabled && logReader.waitingForConsent) approveLogAccess()
+            if (profile.recordedEnabled && logReader.waitingForConsent) serviceLogConsent()
             if (!canObserve()) suspendObservation("画面が消灯・ロック中、または検出が停止中です")
             else if (profile.guardEnabled || profile.transientOsd || profile.recordedEnabled) requestScan() // A NEW window + marker check, not package-only evidence.
             else {
@@ -170,13 +172,22 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
 
     /**
      * 自分のログ要求に出た確認ダイアログだけを承認する。
-     * 前面が SystemUI のログアクセス確認でない時は何もしない。
+     * 確認が出ていない時は、ログ要求が通る唯一の状態（自分のアプリ画面が前面）でだけ取り直す。
      */
-    private fun approveLogAccess() {
+    private fun serviceLogConsent() {
         val root = activeRoot() ?: return
         try {
-            if (!LogAccessConsent.dialogPackage(root.packageName?.toString())) return
-            if (clickAllow(root, 0)) consentApprovals += 1
+            val pkg = root.packageName?.toString()
+            if (LogAccessConsent.dialogPackage(pkg)) {
+                if (clickAllow(root, 0)) consentApprovals += 1
+                return
+            }
+            // Android 13 以降は前面以外からのログ要求を確認なしで拒否する。
+            if (pkg != packageName) return
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastReacquireAt < REACQUIRE_INTERVAL_MS) return
+            lastReacquireAt = now
+            if (logReader.reacquire()) consentRetries += 1
         } catch (_: RuntimeException) {
             // 押せない端末では画面の指示に従って手動で許可してもらう
         } finally { release(root) }
@@ -240,7 +251,9 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         writer.println("station=${o.stationId} watchingTv=${o.watchingTv} evidenceAgeMs=${SystemClock.elapsedRealtime() - o.observedAtMs} pending=${policy.pending?.stationId}")
         writer.println("reason=${o.detail}")
         writer.println("logEvidence=${logReader.state}")
-        writer.println("logConsent=approvals=$consentApprovals waiting=${logReader.waitingForConsent}")
+        writer.println(
+            "logConsent=approvals=$consentApprovals retries=$consentRetries waiting=${logReader.waitingForConsent}",
+        )
     }
 
     private fun requestScan() {
@@ -410,6 +423,7 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
     companion object {
         private const val DISABLED_PACKAGE = "dev.nicotv.detection.disabled"
         private const val CLICK_PARENT_HOPS = 3
+        private const val REACQUIRE_INTERVAL_MS = 6_000L
         private val supportedEvents = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_WINDOWS_CHANGED
         private val configurationKeys = setOf(PreferenceContract.SESSION_ACTIVE, PreferenceContract.DETECTION_MODE,
