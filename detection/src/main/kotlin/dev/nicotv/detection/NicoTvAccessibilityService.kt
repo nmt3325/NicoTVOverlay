@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.graphics.Rect
 import android.view.Display
 import android.view.KeyEvent
@@ -45,6 +46,8 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
     private var settleUntil = 0L
     private var confirmation: Runnable? = null
     private var profile = DetectionProfile.parse(false, "", "", "", "", "{}")
+    // 画面表示に依存しない補助経路。READ_LOGS が付与されている場合だけ動く。
+    private val logReader = LogRecordedReader(SystemClock::elapsedRealtime, publish = { RecordedDetectionBus.publish(it) })
 
     private val scan = Runnable {
         if (canObserve()) {
@@ -148,11 +151,18 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
         info.notificationTimeout = DetectionLimits.MIN_SCAN_MS
         serviceInfo = info
+        if (enabled && profile.recordedEnabled && logsGranted()) logReader.start(profile.recordedStationId)
+        else logReader.stop()
         if (enabled) {
             handler.post(heartbeat)
             requestScan()
         }
     }
+
+    /** READ_LOGS は adb で明示的に付与された場合だけ有効。未付与なら画面表示の読み取りだけを使う。 */
+    private fun logsGranted(): Boolean = try {
+        checkSelfPermission(android.Manifest.permission.READ_LOGS) == PackageManager.PERMISSION_GRANTED
+    } catch (_: RuntimeException) { false }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!connected || interrupted || !profile.collecting || event == null) return
@@ -189,6 +199,7 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         writer.println("NicoTVDetection connected=$connected active=${profile.collecting} aquos=${profile.transientOsd} interrupted=$interrupted")
         writer.println("station=${o.stationId} watchingTv=${o.watchingTv} evidenceAgeMs=${SystemClock.elapsedRealtime() - o.observedAtMs} pending=${policy.pending?.stationId}")
         writer.println("reason=${o.detail}")
+        writer.println("logEvidence=${logReader.state}")
     }
 
     private fun requestScan() {
@@ -310,6 +321,7 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
 
     override fun onInterrupt() {
         interrupted = true
+        logReader.stop()
         handler.removeCallbacksAndMessages(null)
         confirmation = null
         policy.authorize(false)

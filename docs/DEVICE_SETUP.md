@@ -162,3 +162,50 @@ UI階層の採取に使う`uiautomator`は、ほかのユーザー補助サー�
 - **経過時間・シークバーも出ません。** 再生位置は先頭(0)として扱うため、頭から再生していない場合は「この再生位置に合わせて保存」でズレを補正してください。
 - 日時は12時間表記です。`午後11:30` は 23:30、`午前0:10` は 00:10 として解釈します（終了時刻は読みません）。
 - `content://android.media.tv/recorded_program` と `/channel` はどちらも `No result found.` で、TvContract からは番組情報を取得できません。
+
+## 画面表示を使わない自動取得（TVログ経路）
+
+AQUOS の TV アプリは、録画再生の状態を logcat に出している。OSD（画面表示）が出ていなくても、
+ここから「放送日時」と「放送局」を自動で取得できる。
+
+### 使っているログ
+
+- 再生位置（放送時の絶対時刻そのもの。約1秒ごと、一時停止・シークにも追従）
+  `D/TunableTvView(MainView): timeshiftGetCurrentPositionMs: current position =Wed Sep 09 23:48:35 GMT+09:00 2026`
+- 放送局（ISDB の service ID。**再生を開始した瞬間だけ**出る）
+  - `W/DB: [readSvcInfo] not found network=0 svcId=0x5c38 num=26` → 0x5c38 = 23608 = TOKYO MX1 → jk9
+  - `I/[DTVBG]ShDbHelper: makeStringParams() origNetId:32391 serviceId:23608|23609`
+- 参考（番組名。判定には未使用）
+  `D/TvServiceCecFunction: Title : 幼女戦記II #10「活路」`
+
+### 実装
+
+- `detection/src/main/kotlin/dev/nicotv/detection/LogRecordedReader.kt`
+  次のフィルタで logcat を購読し、`RecordedDetectionBus` に放送日時と放送局を流す。
+  `logcat -v brief -T 1 "TunableTvView(MainView):D" "[DTVBG]ShDbHelper:I" "DB:W" "*:S"`
+  ずれが 5 秒を超えたときだけ再アンカーするので、一時停止・早送りにも追従する。
+- `core/src/main/kotlin/dev/nicotv/core/StationCatalog.kt` の `findByServiceId()` が service ID → 実況チャンネルを対応付ける
+  （関東地上波の主要局と TOKYO MX 23608/23609/23610、BS 101・211 を登録済み）。
+- 未登録の service ID のときは設定画面の「放送局」がそのまま使われる。
+
+### 必要な権限（PC から一度だけ）
+
+```
+adb shell pm grant io.github.nmt3325.nicotvoverlay android.permission.READ_LOGS
+```
+
+- 付与されているかは `adb shell dumpsys package io.github.nmt3325.nicotvoverlay | grep READ_LOGS` で確認（`granted=true`）。
+- アプリのプロセスが `log` グループ（gid 1007）に入っていれば全ログを読める：
+  `adb shell cat /proc/$(adb shell pidof io.github.nmt3325.nicotvoverlay)/status | grep Groups`
+- 権限が無い場合、このログ経路は自動で無効になり、従来の OSD 経路だけで動作する（クラッシュしない）。
+- 注意：`run-as` 経由の `logcat` はこの権限を引き継がないため、動作確認には使えない（自分のログしか見えない）。
+
+### 動作確認
+
+```
+adb shell dumpsys activity service io.github.nmt3325.nicotvoverlay/dev.nicotv.detection.NicoTvAccessibilityService
+```
+
+- `logEvidence=` の行に監視状態・取得した放送日時・放送局が出る。
+- 放送局のログ行は再生開始時のみなので、すでに再生中の番組では設定の放送局が使われる。
+  いったん停止して再生し直すと自動判定される。
