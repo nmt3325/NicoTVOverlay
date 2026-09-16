@@ -28,6 +28,10 @@ class SessionController(
     private var epochStarted = 0L
     private var lastObservation: StationObservation? = null
     private var lastTimestamp = Long.MIN_VALUE
+    /** 録画（過去ログ）の再生位置と放送時刻の対応。自動取得のたびに作り直す。 */
+    var recordedPlan: RecordedPlan? = null
+        private set
+    private var recordedSyncedAt = 0L
     fun start(value: AppSettings) {
         require(SettingsValidator.validate(value).isEmpty())
         state = state.copy(active = true)
@@ -42,12 +46,22 @@ class SessionController(
         resetStream()
         sink.preferences(value.overlay)
         state = state.copy(mode = value.mode, backend = value.backend, stationId = null, connection = ConnectionState.IDLE)
+        recordedPlan = null
+        recordedSyncedAt = 0L
+        if (value.backend == Backend.KAKOLOG && value.recordedAuto) {
+            // 放送日時と放送局は録画再生画面の観測で決まるため、ここでは局を選ばない。
+            updateMessage(if (value.recordedCalibrated) "録画の再生情報を待機中（録画を再生し、画面表示を出してください）"
+                else "録画画面の校正が必要です。RECORDED_RESOURCE_IDSを登録してください")
+            return
+        }
         val manual = value.mode == PreferenceContract.MODE_MANUAL
         if (manual) select(StationCatalog.find(value.stationId)?.id, "手動で局を固定")
         else updateMessage(if (value.mode == PreferenceContract.MODE_ACCESSIBILITY && !value.calibrated) "校正が必要です。詳細設定でOSD・ライブ表示IDを登録してください" else "局を待機中（未検出時は非表示）")
     }
     fun observation(value: StationObservation) {
         if (!state.active || settings.mode == PreferenceContract.MODE_MANUAL) return
+        // 録画（過去ログ）は生放送の局検出では切り替えない。
+        if (settings.backend == Backend.KAKOLOG) return
         val origin = if (settings.mode == PreferenceContract.MODE_ACCESSIBILITY) DetectionOrigin.ACCESSIBILITY else DetectionOrigin.BRAVIA
         if (value.origin != origin || value.observedAtMs < epochStarted || value.observedAtMs < lastTimestamp) return
         val time = now()
@@ -60,6 +74,31 @@ class SessionController(
             return
         }
         select(value.stationId, "局を確認")
+    }
+    /**
+     * 録画再生画面の観測から過去ログの再生位置を合わせる。観測のたびに実時間と照らし、
+     * 3秒以上ずれていれば取り直す（一時停止・シーク・早送りに追従する）。
+     */
+    fun recorded(value: RecordedObservation) {
+        if (!state.active || settings.backend != Backend.KAKOLOG || !settings.recordedAuto) return
+        if (value.origin != DetectionOrigin.ACCESSIBILITY || value.observedAtMs < epochStarted) return
+        val time = now()
+        if (value.observedAtMs > time || time - value.observedAtMs >= EVIDENCE_TTL_MS) return
+        val station = StationCatalog.find(value.stationId)
+        if (station == null || value.programStartMs <= 0L || value.positionMs !in 0L..MAX_POSITION_MS) {
+            if (recordedPlan == null) updateMessage(value.detail)
+            return
+        }
+        val elapsed = value.positionMs + (time - value.observedAtMs) + settings.recordedAdjustMs
+        val observed = value.programStartMs + elapsed
+        val expected = recordedPlan?.let { it.anchorMs + (time - recordedSyncedAt) }
+        if (expected != null && state.stationId == station.id &&
+            kotlin.math.abs(observed - expected) < RECORDED_RESYNC_MS) return
+        recordedPlan = RecordedPlan(value.programStartMs, elapsed)
+        recordedSyncedAt = time
+        resetStream()
+        state = state.copy(stationId = null)
+        select(station.id, "録画の放送日時に同期")
     }
     fun tick() {
         if (!state.active || settings.mode == PreferenceContract.MODE_MANUAL) return
@@ -102,7 +141,7 @@ class SessionController(
                     ConnectionState.RESOLVING -> "実況番組を確認中"
                     ConnectionState.CONNECTING -> "接続中"
                     ConnectionState.RECONNECTING -> "再接続中"
-                    ConnectionState.NO_PROGRAM -> "放送中の実況番組がありません"
+                    ConnectionState.NO_PROGRAM -> if (settings.backend == Backend.KAKOLOG) "過去ログの範囲外です（放送日時と再生位置を確認してください）" else "放送中の実況番組がありません"
                     ConnectionState.ERROR -> "接続エラー：停止・再開始で再試行できます（自動切替なし）"
                     ConnectionState.IDLE -> "待機中"
                 })
@@ -128,5 +167,9 @@ class SessionController(
         state = state.copy(stationId = null, connection = ConnectionState.IDLE, message = message)
         publish(state)
     }
-    companion object { const val EVIDENCE_TTL_MS = 30_000L }
+    companion object {
+        const val EVIDENCE_TTL_MS = 30_000L
+        const val RECORDED_RESYNC_MS = 3_000L
+        const val MAX_POSITION_MS = 12 * 60 * 60 * 1000L
+    }
 }

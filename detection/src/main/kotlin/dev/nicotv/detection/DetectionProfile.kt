@@ -55,12 +55,17 @@ internal data class DetectionProfile(
     val liveIds: Set<String>,
     val aliases: Map<String, String>,
     val valid: Boolean,
+    /** 録画再生画面で日時・局・位置を表示するビューID。空なら自動取得は無効。 */
+    val recordedIds: Set<String> = emptySet(),
 ) {
     val enabled: Boolean get() = sessionActive && mode == PreferenceContract.MODE_ACCESSIBILITY &&
         valid && packages.isNotEmpty() && stationIds.isNotEmpty() && liveIds.isNotEmpty()
     val guardEnabled: Boolean get() = sessionActive && mode == PreferenceContract.MODE_BRAVIA &&
         valid && packages.isNotEmpty() && liveIds.isNotEmpty()
-    val collecting: Boolean get() = enabled || guardEnabled
+    /** 録画の放送日時・放送局の自動取得。局ラベル校正（OSD）とは独立に成立する。 */
+    val recordedEnabled: Boolean get() = sessionActive && mode == PreferenceContract.MODE_ACCESSIBILITY &&
+        valid && packages.isNotEmpty() && recordedIds.isNotEmpty()
+    val collecting: Boolean get() = enabled || guardEnabled || recordedEnabled
     // Continuity is opt-in and limited to the exact, physically verified AQUOS profile.
     val transientOsd: Boolean get() = enabled && packages == setOf(AquosProfile.PACKAGE) &&
         stationIds == setOf(AquosProfile.STATION) && liveIds == setOf(AquosProfile.LIVE)
@@ -72,7 +77,7 @@ internal data class DetectionProfile(
             value.split(',', '\n', '\r').map(String::trim).filter(String::isNotEmpty).toSet()
 
         fun parse(active: Boolean, mode: String, packages: String, stationIds: String,
-                  liveIds: String, customAliases: String): DetectionProfile {
+                  liveIds: String, customAliases: String, recordedIds: String = ""): DetectionProfile {
             if (mode == PreferenceContract.MODE_BRAVIA) {
                 // Foreground guard only: station OSD/aliases are deliberately not parsed or required.
                 val bounded = packages.length <= 16_384 && liveIds.length <= 16_384
@@ -84,16 +89,18 @@ internal data class DetectionProfile(
                     }
                 return DetectionProfile(active, mode, pkgs, emptySet(), markers, emptyMap(), valid)
             }
-            var valid = listOf(packages, stationIds, liveIds, customAliases).all { it.length <= 16_384 }
+            var valid = listOf(packages, stationIds, liveIds, customAliases, recordedIds).all { it.length <= 16_384 }
             // Do not partially apply malformed/oversized settings.
             val pkgs = if (valid) entries(packages) else emptySet()
             val labels = if (valid) entries(stationIds) else emptySet()
             val live = if (valid) entries(liveIds) else emptySet()
+            val recorded = if (valid) entries(recordedIds) else emptySet()
             valid = valid && pkgs.size <= 32 && labels.size <= 16 && live.size <= 16 &&
                 pkgs.all { packagePattern.matches(it) } &&
                 (labels + live).all { id ->
                     idPattern.matchEntire(id)?.groupValues?.get(1) in pkgs
-                } && labels.intersect(live).isEmpty()
+                } && labels.intersect(live).isEmpty() && recorded.size <= 16 &&
+                recorded.all { id -> idPattern.matchEntire(id)?.groupValues?.get(1) in pkgs }
             val aliases = mutableMapOf<String, String>()
             for (station in StationCatalog.stations) {
                 for (alias in station.aliases + station.name) aliases[normalizeLabel(alias)] = station.id
@@ -110,7 +117,7 @@ internal data class DetectionProfile(
                     valid = false
                 } else aliases[key] = requireNotNull(id)
             }
-            return DetectionProfile(active, mode, pkgs, labels, live, aliases.toMap(), valid)
+            return DetectionProfile(active, mode, pkgs, labels, live, aliases.toMap(), valid, recorded)
         }
     }
 }

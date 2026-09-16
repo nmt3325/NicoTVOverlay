@@ -54,7 +54,7 @@ object PlatformPermissions {
             defaultDisplay = defaultTarget(context) && screenReady(context),
             braviaCalibrated = config.braviaVisibilityCalibrated,
             localHost = config.mode != PreferenceContract.MODE_BRAVIA || localHostMatches(config.braviaHost, ownIpv4Addresses()))
-            ?: if (SettingsValidator.validate(config).isNotEmpty()) "設定に不正な値があります" else if (config.mode == PreferenceContract.MODE_BRAVIA &&
+            ?: if (SettingsValidator.validate(config).isNotEmpty()) "設定に不正な値があります" else if (config.backend == Backend.KAKOLOG && config.recordedAuto && !config.recordedCalibrated) "録画画面の校正（RECORDED_RESOURCE_IDS）を登録してください" else if (config.backend == Backend.KAKOLOG && !config.recordedAuto && config.recordedStartMs <= 0L) "録画番組の放送日時（放送日・開始時刻）を設定してください" else if (config.mode == PreferenceContract.MODE_BRAVIA &&
                 (!EncryptedPskStore(context).contains() || SettingsValidator.stationMap(config.braviaMapJson, true).isEmpty())) "PSKと局URI対応表を登録してください" else null
     } catch (_: Exception) { "表示先・権限・ネットワークを確認できない端末では開始できません" }
     fun startBlock(visible: Boolean, overlays: Boolean, accessibility: Boolean, mode: String,

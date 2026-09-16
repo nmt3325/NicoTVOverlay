@@ -57,3 +57,13 @@ mainへのpush、pull request、手動実行でテスト・lint・APKビルド�
 - [アプリの権限とライフサイクル](docs/research/app-lifecycle.md)
 
 調査の起点は[ニコニコ実況](https://site.nicovideo.jp/jk/)。[NCOverlay](https://github.com/Midra429/NCOverlay)の設計も参考にしましたが、ブラウザ拡張の移植ではなくAndroidのネイティブ描画を使用しています。公式protobufスキーマのMIT通知はソースとAPK内に同梱しています。サービスの変更により接続できなくなる場合があります。
+
+## 録画番組への対応
+
+取得元に「録画の過去ログ」を選ぶと、実況過去ログAPI（NX-Jikkyoの投稿を含む）から放送当時のコメントを取得し、録画の再生に合わせて流します。
+
+- 録画を再生して再生情報（放送日時・放送局・再生位置）を表示すると、放送時刻と局を自動取得して同期します。
+- 一時停止・シーク・早送りは、再生情報を再表示すれば自動で追従します（3秒以上のずれを検出）。
+- 再生画面に情報が出ない端末向けに、放送日時と再生位置の手入力も残してあります。
+
+手順は [docs/DEVICE_SETUP.md](docs/DEVICE_SETUP.md)、APIの調査は [docs/research/comment-api.md](docs/research/comment-api.md) を参照してください。

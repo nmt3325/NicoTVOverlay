@@ -9,10 +9,12 @@ import android.os.*
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import dev.nicotv.comment.KakologCommentSource
 import dev.nicotv.comment.NicoLiveCommentSource
 import dev.nicotv.comment.NxJikkyoCommentSource
 import dev.nicotv.core.*
 import dev.nicotv.detection.BraviaStationDetector
+import dev.nicotv.detection.RecordedDetectionBus
 import dev.nicotv.detection.StationDetectionBus
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -41,7 +43,15 @@ class OverlayService : Service() {
         repository = SettingsRepository(this)
         window = OverlayWindow(this) { stopAll("重ね合わせ表示が許可されていないか、端末が対応していません") }
         controller = SessionController(scope, SystemClock::elapsedRealtime,
-            { if (it == Backend.NX) NxJikkyoCommentSource() else NicoLiveCommentSource() }, window) {
+            { backend ->
+                when (backend) {
+                    Backend.NX -> NxJikkyoCommentSource()
+                    // 録画は自動取得した放送時刻（なければ手入力の設定）を基準に再生する。
+                    Backend.KAKOLOG -> KakologCommentSource(
+                        controller.recordedPlan ?: SettingsRepository(this@OverlayService).read().recordedPlan())
+                    Backend.OFFICIAL -> NicoLiveCommentSource()
+                }
+            }, window) {
             RuntimeSession.publish(it)
             if (promoted && it.active) notifyState(it)
         }
@@ -112,6 +122,16 @@ class OverlayService : Service() {
         StationDetectionBus.publish(StationObservation(null, DetectionOrigin.ACCESSIBILITY, SystemClock.elapsedRealtime(), false, "設定変更"))
         when (config.mode) {
             PreferenceContract.MODE_ACCESSIBILITY -> {
+                if (config.backend == Backend.KAKOLOG && config.recordedAuto) {
+                    // 録画は放送日時・放送局の観測だけを使い、生放送の局検出は購読しない。
+                    if (!config.recordedCalibrated) return
+                    detector = scope.launch {
+                        RecordedDetectionBus.observation.collect {
+                            if (epoch == detectorEpoch && repository.preferences.getBoolean(PreferenceContract.SESSION_ACTIVE, false)) controller.recorded(it)
+                        }
+                    }
+                    return
+                }
                 if (!config.calibrated) return
                 detector = scope.launch {
                     StationDetectionBus.observation.collect {

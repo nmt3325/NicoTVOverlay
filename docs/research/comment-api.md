@@ -87,3 +87,23 @@ Real daily rollover, extended multi-hour operation, all ten channels' streaming 
 - **Fresh real connection:** after this fix, the unchanged opt-in JUnit smoke ran for 80 seconds on jk4, 2026-09-08 **17:15:28.538521757Z–17:16:48.743461538Z**, reaching RESOLVING/CONNECTING/LIVE and delivering **5 NICONICO comments**, tests=1/skipped=0/failures=0, exit 0 / EOF true. This is new evidence, not the earlier 19-comment comparison.
 - Station choice was explicit and activity-based: jk211 remained at 3273 comments from 17:09:57 to 17:13:36, while jk4 increased 13512→13596 (+84); therefore the requested fresh check used active jk4 rather than assuming jk211 was still active. Only the test environment selector changed, not runtime fallback behavior. No public comments were posted and no raw comment text/user ids/opaque URLs were retained.
 - All changes are within comment sources/tests and this document; core/public contracts, Gradle/build settings, app/overlay and environment are untouched. Real Android stop/channel-switch stress and independent re-review of R3 remain parent-owned follow-up; the controlled tests do not claim device/endurance coverage.
+
+## 録画番組向けの過去ログ（NX-Jikkyo / 実況過去ログAPI）
+
+録画番組には「今流れているコメント」が存在しないため、放送当時のコメントを時刻指定で取得する。
+
+- エンドポイント: `GET https://jikkyo.tsukumijima.net/api/kakolog/{jk局ID}?starttime={unix秒}&endtime={unix秒}&format=json`
+- 応答: `{"packet":[{"chat":{"thread","no","vpos","date","date_usec","mail","user_id","content", ...}}]}`。値はすべて文字列。
+- 放送時刻は `date`（unix秒）+ `date_usec` でミリ秒まで復元できる。これを再生位置の基準に使う。
+- NX-Jikkyo に投稿されたコメントもこの過去ログ（KakologArchives）に取り込まれ、`nx_jikkyo` フラグ付きで返る。よって「NX-Jikkyoの過去ログ」はこのRESTが正規経路。
+- カバレッジ: 2009年11月～現在。未提供区間は空の `packet` が返る。
+
+### 採用しなかった経路
+
+`GET /api/v1/threads/{thread_id}`（NX-Jikkyo）は時刻範囲を指定できず、1スレッド（1日分）を一括で返す。実測で 9.6MB あり、TV端末の境界あり割当方針に反するため使わない。
+
+### 取得量の見積と分割
+
+- 300秒分（jk1・ゴールデンタイム）で約 83KB。本実装は **120秒ずつ** 前取りして流す。
+- 1チャンクあたり `MAX_BYTES = 4MiB` / `MAX_CHATS = 20000` で打ち切る（`PastLog.kt`）。
+- URL構築は `ServiceUrls.kakolog()` のみ。局IDは `jk[0-9]{1,8}`、範囲は1秒～1800秒に制限し、送信先ホストは許容リストで担保する。

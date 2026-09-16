@@ -49,12 +49,14 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
     private val scan = Runnable {
         if (canObserve()) {
             if (profile.guardEnabled) publishObservation(readLiveForegroundGuard())
+            else if (!profile.enabled && profile.recordedEnabled) publishRecorded()
             else {
                 val pending = policy.pending
                 val fresh = readEvidence()
                 // Event storms cannot indefinitely postpone a due confirmation.
                 scheduleConfirmation(if (pending != null && SystemClock.elapsedRealtime() >= pending.dueAt)
                     policy.confirm(pending.generation, fresh) else policy.evidence(fresh))
+                if (profile.recordedEnabled) publishRecorded()
             }
         } else suspendObservation("自動検出は停止中、または画面が無効です")
     }
@@ -62,7 +64,7 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         override fun run() {
             if (!connected || interrupted || !profile.collecting) return
             if (!canObserve()) suspendObservation("画面が消灯・ロック中、または検出が停止中です")
-            else if (profile.guardEnabled || profile.transientOsd) requestScan() // A NEW window + marker check, not package-only evidence.
+            else if (profile.guardEnabled || profile.transientOsd || profile.recordedEnabled) requestScan() // A NEW window + marker check, not package-only evidence.
             else {
                 // No child/text/description access; package-filtered events miss Home departure.
                 val identity = foregroundOnly()
@@ -127,6 +129,7 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
                 if (guard) "" else preferences.getString(PreferenceContract.OSD_RESOURCE_IDS, "") ?: "",
                 preferences.getString(PreferenceContract.LIVE_RESOURCE_IDS, "") ?: "",
                 if (guard) "{}" else preferences.getString(PreferenceContract.CUSTOM_ALIASES, "{}") ?: "{}",
+                if (guard) "" else preferences.getString(PreferenceContract.RECORDED_RESOURCE_IDS, "") ?: "",
             )
         } catch (_: ClassCastException) { DetectionProfile.parse(false, "", "", "", "", "{}") }
         policy.authorize(connected && !interrupted && profile.enabled)
@@ -139,7 +142,8 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         info.flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
             (if (enabled && profile.guardEnabled) AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS else 0) or
             (if (enabled && profile.transientOsd) AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS or
-                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS else 0) // AQUOS otherwise exposes only its root.
+                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS else 0) or
+            (if (enabled && profile.recordedEnabled) AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS else 0) // AQUOS otherwise exposes only its root.
         info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
         info.notificationTimeout = DetectionLimits.MIN_SCAN_MS
         serviceInfo = info
@@ -243,6 +247,23 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
         } finally { release(root) }
     }
 
+    /** 録画再生画面の校正済みIDだけを読み、放送日時・放送局・再生位置を公開する。 */
+    private fun publishRecorded() {
+        lastScanAt = SystemClock.elapsedRealtime()
+        fun publish(evidence: RecordedEvidence) =
+            RecordedDetectionBus.publish(recordedObservation(evidence, SystemClock.elapsedRealtime()))
+        val root = activeRoot()
+        if (root == null) { publish(RecordedEvidence(null, 0L, 0L, "前面の画面を取得できません")); return }
+        val evidence = try {
+            val pkg = root.packageName?.toString()
+            if (pkg == null || pkg !in profile.packages) RecordedEvidence(null, 0L, 0L, "テレビアプリが前面にありません")
+            else RecordedEvidenceReader.read(AndroidEvidenceNode(root), ForegroundIdentity(pkg, root.windowId),
+                profile, System.currentTimeMillis())
+        } catch (_: RuntimeException) { RecordedEvidence(null, 0L, 0L, "録画画面を読み取れません") }
+        finally { release(root) }
+        publish(evidence)
+    }
+
     private fun readLiveForegroundGuard(): StationObservation {
         lastScanAt = SystemClock.elapsedRealtime()
         fun unknown() = StationObservation(null, DetectionOrigin.ACCESSIBILITY, SystemClock.elapsedRealtime(), false,
@@ -336,7 +357,7 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_WINDOWS_CHANGED
         private val configurationKeys = setOf(PreferenceContract.SESSION_ACTIVE, PreferenceContract.DETECTION_MODE,
             PreferenceContract.TV_PACKAGES, PreferenceContract.OSD_RESOURCE_IDS, PreferenceContract.LIVE_RESOURCE_IDS,
-            PreferenceContract.CUSTOM_ALIASES)
+            PreferenceContract.CUSTOM_ALIASES, PreferenceContract.RECORDED_RESOURCE_IDS)
         private val collectionClasses = setOf("android.widget.ListView", "android.widget.GridView",
             "androidx.recyclerview.widget.RecyclerView", "android.support.v7.widget.RecyclerView")
         @Suppress("DEPRECATION") private fun release(node: AccessibilityNodeInfo) { node.recycle() }

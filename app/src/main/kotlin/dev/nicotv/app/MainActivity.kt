@@ -152,9 +152,20 @@ class MainActivity : Activity() {
         section("コメントの取得元")
         choices(Backend.entries.map { it.label to it.name }, s.backend.name) { value ->
             val next = Backend.valueOf(value)
-            val save = { persist(repository.read().copy(backend = next)); showPage("視聴") }
-            if (next == Backend.NX) confirm("NX-Jikkyoを選択", "ニコニコ公式とは別サービスのコメントです。公式の接続失敗時も自動では切り替わりません。選択した取得元を常に表示します。", save) else save()
+            val save = {
+                val current = repository.read()
+                val mode = if (next != Backend.KAKOLOG) current.mode
+                    else if (current.recordedAuto) PreferenceContract.MODE_ACCESSIBILITY else PreferenceContract.MODE_MANUAL
+                persist(current.copy(backend = next, mode = mode))
+                showPage("視聴")
+            }
+            when (next) {
+                Backend.NX -> confirm("NX-Jikkyoを選択", "ニコニコ公式とは別サービスのコメントです。公式の接続失敗時も自動では切り替わりません。選択した取得元を常に表示します。", save)
+                Backend.KAKOLOG -> confirm("録画番組の過去ログを選択", "NX-Jikkyoの過去ログ取得を使い、放送当時のコメントを録画の再生に合わせて表示します。生放送の受信は行いません。自動取得には録画再生画面の校正とユーザー補助の許可が必要です。", save)
+                else -> save()
+            }
         }
+        if (s.backend == Backend.KAKOLOG) recordedSection(s)
         section("手動の実況局  ·  ${StationCatalog.find(s.stationId)?.name ?: "未選択"}")
         val columns = if (resources.configuration.screenWidthDp >= 800) 5 else 2
         StationCatalog.stations.chunked(columns).forEach { stations ->
@@ -172,6 +183,63 @@ class MainActivity : Activity() {
         paragraph("局カードを選ぶと手動固定になります。地域局は詳細の別名対応表で設定してください。番号だけから放送局を推測することはありません。")
         if (s.mode == PreferenceContract.MODE_ACCESSIBILITY && !s.calibrated) paragraph("校正が必要：OSD_RESOURCE_IDS と LIVE_RESOURCE_IDS は初期状態で空です。詳細・権限で登録するまで局未検出です。", warning = true)
         paragraph("テレビ本体にインストールしてください。外付けTVボックスからテレビ内蔵チューナーへ重ねることはできません。放送映像上の表示は実機確認が必要です。")
+    }
+    /** 録画番組（過去ログ）の同期設定。映像やチャンネル操作には一切関与しない。 */
+    private fun recordedSection(s: AppSettings) {
+        section("録画番組の過去ログ")
+        choices(listOf("自動取得" to "auto", "手入力" to "manual"), if (s.recordedAuto) "auto" else "manual") { value ->
+            val auto = value == "auto"
+            persist(repository.read().copy(recordedAuto = auto,
+                mode = if (auto) PreferenceContract.MODE_ACCESSIBILITY else PreferenceContract.MODE_MANUAL))
+            showPage("視聴")
+        }
+        if (s.recordedAuto) {
+            paragraph("録画を再生し、リモコンの画面表示などで再生情報（放送日時・放送局・再生位置）を出すと、その放送時刻のコメントを流します。読み取るのは下で登録したビューIDのテキストだけです。")
+            val ids = field("RECORDED_RESOURCE_IDS（package:id/name・改行区切り）", s.recordedIds, multiline = true)
+            body.addView(button("録画画面の校正を保存", primary = true) {
+                if (persist(repository.read().copy(recordedIds = ids.text.toString(), recordedAuto = true,
+                        mode = PreferenceContract.MODE_ACCESSIBILITY))) {
+                    showPage("視聴"); showHint("保存しました。録画を再生して再生情報を表示してください")
+                }
+            }, fullButton())
+            if (!s.recordedCalibrated) paragraph("校正が必要：録画再生画面で放送日時・放送局・再生位置を表示しているビューIDを登録してください。局名は別名表に登録された表記だけを認識します。", warning = true)
+            syncRow(true)
+            paragraph("現在の補正：" + SettingsValidator.offsetText(kotlin.math.abs(s.recordedAdjustMs)) +
+                if (s.recordedAdjustMs < 0) "（コメントを戻す）" else "（コメントを進める）")
+        } else {
+            val (dateText, timeText) = SettingsValidator.recordedFields(s.recordedStartMs)
+            val date = field("放送日（例 2020-11-27）", dateText)
+            val time = field("放送開始時刻（例 21:00）", timeText)
+            val offset = field("録画の再生位置（例 12:30 または 750）", SettingsValidator.offsetText(s.recordedOffsetMs))
+            body.addView(button("この再生位置に合わせて保存", primary = true) {
+                val startMs = SettingsValidator.recordedStart(date.text.toString(), time.text.toString())
+                val offsetMs = SettingsValidator.offsetMs(offset.text.toString())
+                when {
+                    startMs == null -> showErrors(listOf("放送日はYYYY-MM-DD、開始時刻はHH:MMで、2009年11月以降を入力してください"))
+                    offsetMs == null -> showErrors(listOf("再生位置は秒数、mm:ss、hh:mm:ss のいずれかで12時間以内にしてください"))
+                    else -> if (persist(repository.read().copy(backend = Backend.KAKOLOG, recordedAuto = false,
+                            mode = PreferenceContract.MODE_MANUAL, recordedStartMs = startMs, recordedOffsetMs = offsetMs))) {
+                        showPage("視聴"); showHint("放送日時を保存しました。録画を再生した状態で開始してください")
+                    }
+                }
+            }, fullButton())
+            syncRow(false)
+        }
+    }
+    /** ずれたときの±調整。保存すると過去ログを取り直す。 */
+    private fun syncRow(adjust: Boolean) {
+        val sync = row()
+        listOf(-30L, -10L, 10L, 30L).forEach { delta ->
+            sync.addView(button(if (delta < 0) "${delta}秒" else "+${delta}秒") {
+                val current = repository.read()
+                val next = if (adjust) current.copy(recordedAdjustMs = (current.recordedAdjustMs + delta * 1000L)
+                    .coerceIn(-SettingsValidator.RECORDED_MAX_ADJUST_MS, SettingsValidator.RECORDED_MAX_ADJUST_MS))
+                else current.copy(recordedOffsetMs = (current.recordedOffsetMs + delta * 1000L)
+                    .coerceIn(0L, SettingsValidator.RECORDED_MAX_OFFSET_MS))
+                if (persist(next)) { showPage("視聴"); showHint("同期を調整しました") }
+            }, weighted())
+        }
+        body.addView(sync)
     }
     private fun appearancePage() {
         var options = repository.read().overlay

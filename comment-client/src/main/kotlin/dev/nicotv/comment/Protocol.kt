@@ -28,6 +28,8 @@ internal fun protocolFailure(): Nothing = throw StreamFailure(safeMessage = "実
 
 internal object ServiceUrls {
     private const val NX = "nx-jikkyo.tsukumijima.net"
+    // NX-Jikkyo の過去ログ取得が使う実況過去ログAPI。時間範囲を指定した読み取りだけに使う。
+    private const val ARCHIVE = "jikkyo.tsukumijima.net"
     private fun parse(raw: String, websocket: Boolean): HttpUrl {
         val prefix = if (websocket) "wss://" else "https://"
         if (raw.length > 8192 || !raw.startsWith(prefix) || raw.any { it <= ' ' || it == '\\' }) reject()
@@ -51,11 +53,17 @@ internal object ServiceUrls {
         return nxSocket("wss://$NX/api/v1/channels/$station/ws/watch")
     }
     fun nxSocket(raw: String): HttpUrl = parse(raw, true).also { if (it.host != NX) reject() }
+    /** 過去ログ（録画）用。局IDと妥当な時間範囲だけを許可し、任意URLは組み立てない。 */
+    fun kakolog(station: String, startSec: Long, endSec: Long): HttpUrl {
+        if (!Regex("jk[0-9]{1,8}").matches(station)) reject()
+        if (startSec < 1 || endSec <= startSec || endSec - startSec > 1800 || endSec > 253402300799L) reject()
+        return parse("https://$ARCHIVE/api/kakolog/$station?starttime=$startSec&endtime=$endSec&format=json", false)
+    }
     fun transport(url: HttpUrl) {
         if (url.scheme != "https" || url.port != 443 || url.username.isNotEmpty() ||
             url.password.isNotEmpty() || url.fragment != null ||
             !(url.host == "live.nicovideo.jp" || url.host == "mpn.live.nicovideo.jp" ||
-              url.host.endsWith(".live2.nicovideo.jp") || url.host == NX)) reject()
+              url.host.endsWith(".live2.nicovideo.jp") || url.host == NX || url.host == ARCHIVE)) reject()
     }
     private fun reject(): Nothing = throw StreamFailure(ConnectionState.ERROR, "安全な実況サーバーの接続先を確認できません", terminal = true)
 }
