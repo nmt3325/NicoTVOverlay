@@ -140,3 +140,25 @@ UI階層の採取に使う`uiautomator`は、ほかのユーザー補助サー�
 - 読み取るのは登録したビューIDのテキストだけ。番組表など一覧画面では取得しない。
 - 放送日時と局の両方が一意に決まらないときはコメントを流さない。
 - チャンネル操作・再生操作は行わない（読み取り専用）。
+
+## AQUOS 4K TVJ25 の実機値（録画再生）
+
+`jp.co.sharp.av.android.aquostvapp` で録画を再生し、リモコンの「画面表示」（`adb shell input keyevent 165`）を出したときに文字を持つIDは次の9個だけでした。
+
+| ID | 実際の値 |
+| --- | --- |
+| `…:id/channel_call_recording_program_time_text` | `9/2(水) 午後11:30～午前0:00` |
+| `…:id/channel_call_recording_program_text` | 番組名 |
+| `…:id/channel_call_recording_device_name` | `USB-HDD` |
+| `…:id/channel_call_recording_resolution` | `1080i` |
+| `…:id/channel_call_recording_audio_channel` | `ステレオ` |
+| `…:id/channel_call_recording_closed_caption` | `[切]--` |
+
+「録画の読み取りID」には `jp.co.sharp.av.android.aquostvapp:id/channel_call_recording_program_time_text` を設定します。
+
+この機種には次の制限があります。
+
+- **放送局は画面に出ません。** 設定の「放送局」で選んだ局を使います。未設定のときは検出を保留し、理由を表示します。
+- **経過時間・シークバーも出ません。** 再生位置は先頭(0)として扱うため、頭から再生していない場合は「この再生位置に合わせて保存」でズレを補正してください。
+- 日時は12時間表記です。`午後11:30` は 23:30、`午前0:10` は 00:10 として解釈します（終了時刻は読みません）。
+- `content://android.media.tv/recorded_program` と `/channel` はどちらも `No result found.` で、TvContract からは番組情報を取得できません。

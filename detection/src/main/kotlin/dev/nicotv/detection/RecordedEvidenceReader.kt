@@ -21,18 +21,32 @@ internal data class RecordedEvidence(
 internal object RecordedTextParser {
     const val MAX_POSITION_MS = 12 * 60 * 60 * 1000L
     // 「2026/9/13 21:00」「9/13(土) 21:00〜21:54」「9月13日 21:00」など、日付と開始時刻のみ。
-    private val broadcast = Regex("(?:(20[0-9]{2})\\s*[/年.-]\\s*)?([0-9]{1,2})\\s*[/月.-]\\s*([0-9]{1,2})[^0-9]{0,16}?([0-9]{1,2}):([0-9]{2})")
+    private val datePart = Regex("(?:(20[0-9]{2})\\s*[/年.-]\\s*)?([0-9]{1,2})\\s*[/月.-]\\s*([0-9]{1,2})")
+    // 実機（AQUOS）の画面表示は「9/2(水) 午後11:30～午前0:00」形式。午前/午後は12時間表記として扱う。
+    private val timePart = Regex("(午前|午後|AM|PM|am|pm)?\\s*([0-9]{1,2}):([0-9]{2})")
+    private const val TIME_WINDOW_CHARS = 24
     // 文字列全体が時間表記のノードだけを位置候補にする。
     private val clock = Regex("(?:([0-9]{1,2}):)?([0-9]{1,2}):([0-9]{2})")
 
     /** 年の表記がない画面表示では、いまを越えない直近の年として解釈する。 */
     fun broadcastStartMs(text: String, nowWallMs: Long, zone: ZoneId): Long? {
-        val match = broadcast.find(text) ?: return null
-        val year = match.groupValues[1].toIntOrNull()
-        val month = match.groupValues[2].toIntOrNull() ?: return null
-        val day = match.groupValues[3].toIntOrNull() ?: return null
-        val hour = match.groupValues[4].toIntOrNull() ?: return null
-        val minute = match.groupValues[5].toIntOrNull() ?: return null
+        val date = datePart.find(text) ?: return null
+        val year = date.groupValues[1].toIntOrNull()
+        val month = date.groupValues[2].toIntOrNull() ?: return null
+        val day = date.groupValues[3].toIntOrNull() ?: return null
+        // 日付の直後に現れる最初の時刻だけを開始時刻として使う（終了時刻は読まない）。
+        val time = timePart.find(text.substring(date.range.last + 1).take(TIME_WINDOW_CHARS)) ?: return null
+        val marker = time.groupValues[1]
+        val rawHour = time.groupValues[2].toIntOrNull() ?: return null
+        val minute = time.groupValues[3].toIntOrNull() ?: return null
+        val am = marker == "午前" || marker.equals("AM", ignoreCase = true)
+        val pm = marker == "午後" || marker.equals("PM", ignoreCase = true)
+        if ((am || pm) && rawHour !in 0..12) return null
+        val hour = when {
+            am -> if (rawHour == 12) 0 else rawHour
+            pm -> if (rawHour == 12 || rawHour == 0) 12 else rawHour + 12
+            else -> rawHour
+        }
         if (month !in 1..12 || day !in 1..31 || hour !in 0..23 || minute !in 0..59) return null
         val today = try { java.time.Instant.ofEpochMilli(nowWallMs).atZone(zone).toLocalDate() } catch (_: DateTimeException) { return null }
         val years = if (year != null) listOf(year) else listOf(today.year, today.year - 1)
@@ -127,10 +141,22 @@ internal object RecordedEvidenceReader {
             when {
                 failure == "list" -> unknown("一覧表示では再生中の録画を確認できません")
                 failure != null -> unknown("録画画面を読み取れません ($failure nodes=$nodes)")
-                stations.size != 1 -> unknown("録画の放送局を一意に確認できません（別名表に登録すると認識します）")
+                stations.size > 1 -> unknown("録画の放送局を一意に確認できません（別名表に登録すると認識します）")
                 starts.size != 1 -> unknown("録画の放送日時を一意に確認できません")
-                else -> RecordedEvidence(stations.single(), starts.single(),
-                    RecordedTextParser.positionMs(clocks) ?: 0L, "録画の放送日時と放送局を確認")
+                // 実機の録画再生の画面表示には放送局が出ないため、設定で選んだ放送局を使う。
+                stations.isEmpty() && profile.recordedStationId == null ->
+                    unknown("録画の放送局が画面に出ないため、設定で放送局を選んでください")
+                else -> {
+                    val station = stations.firstOrNull() ?: requireNotNull(profile.recordedStationId)
+                    val position = RecordedTextParser.positionMs(clocks)
+                    val reason = when {
+                        stations.isEmpty() && position == null -> "放送日時を自動取得（放送局は設定・再生位置は先頭）"
+                        stations.isEmpty() -> "放送日時と再生位置を自動取得（放送局は設定）"
+                        position == null -> "放送日時と放送局を自動取得（再生位置は先頭）"
+                        else -> "録画の放送日時と放送局を確認"
+                    }
+                    RecordedEvidence(station, starts.single(), position ?: 0L, reason)
+                }
             }
         } catch (_: RuntimeException) { unknown("録画画面を読み取れません") }
     }

@@ -57,6 +57,8 @@ internal data class DetectionProfile(
     val valid: Boolean,
     /** 録画再生画面で日時・局・位置を表示するビューID。空なら自動取得は無効。 */
     val recordedIds: Set<String> = emptySet(),
+    /** 録画再生の画面表示に放送局が出ない機種のために、設定で選んだ放送局を使う。 */
+    val recordedStationId: String? = null,
 ) {
     val enabled: Boolean get() = sessionActive && mode == PreferenceContract.MODE_ACCESSIBILITY &&
         valid && packages.isNotEmpty() && stationIds.isNotEmpty() && liveIds.isNotEmpty()
@@ -77,7 +79,8 @@ internal data class DetectionProfile(
             value.split(',', '\n', '\r').map(String::trim).filter(String::isNotEmpty).toSet()
 
         fun parse(active: Boolean, mode: String, packages: String, stationIds: String,
-                  liveIds: String, customAliases: String, recordedIds: String = ""): DetectionProfile {
+                  liveIds: String, customAliases: String, recordedIds: String = "",
+                  recordedStation: String = ""): DetectionProfile {
             if (mode == PreferenceContract.MODE_BRAVIA) {
                 // Foreground guard only: station OSD/aliases are deliberately not parsed or required.
                 val bounded = packages.length <= 16_384 && liveIds.length <= 16_384
@@ -117,7 +120,9 @@ internal data class DetectionProfile(
                     valid = false
                 } else aliases[key] = requireNotNull(id)
             }
-            return DetectionProfile(active, mode, pkgs, labels, live, aliases.toMap(), valid, recorded)
+            // 放送局は登録済みの局IDだけを受け入れる（画面文字からの推測はしない）。
+            val station = recordedStation.trim().ifEmpty { null }?.takeIf { StationCatalog.find(it) != null }
+            return DetectionProfile(active, mode, pkgs, labels, live, aliases.toMap(), valid, recorded, station)
         }
     }
 }

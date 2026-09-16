@@ -130,6 +130,7 @@ class NicoTvAccessibilityService : AccessibilityService(), SharedPreferences.OnS
                 preferences.getString(PreferenceContract.LIVE_RESOURCE_IDS, "") ?: "",
                 if (guard) "{}" else preferences.getString(PreferenceContract.CUSTOM_ALIASES, "{}") ?: "{}",
                 if (guard) "" else preferences.getString(PreferenceContract.RECORDED_RESOURCE_IDS, "") ?: "",
+                if (guard) "" else preferences.getString("manual_station", "") ?: "",
             )
         } catch (_: ClassCastException) { DetectionProfile.parse(false, "", "", "", "", "{}") }
         policy.authorize(connected && !interrupted && profile.enabled)
